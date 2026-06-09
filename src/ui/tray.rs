@@ -6,18 +6,18 @@ mod imp {
     use std::sync::{Arc, OnceLock};
     use tracing::{info, warn};
     use windows::core::w;
-    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::Foundation::{HWND, HMODULE, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Shell::{
-        Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-        NOTIFYICONDATAW,
+        Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow,
         DispatchMessageW, GetMessageW, PostQuitMessage, RegisterClassW, TrackPopupMenu,
-        TranslateMessage, HMENU, IMAGE_ICON, LR_DEFAULTSIZE, MF_STRING, MSG, TPM_BOTTOMALIGN,
-        TPM_LEFTALIGN, TPM_RETURNCMD, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
-        WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED, LoadIconW, LoadImageW, IDI_APPLICATION,
+        TranslateMessage, HMENU, HICON, IMAGE_ICON, LR_DEFAULTSIZE, MF_STRING, MSG,
+        TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, WM_APP, WM_COMMAND, WM_DESTROY,
+        WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED, LoadIconW, LoadImageW,
+        IDI_APPLICATION,
     };
 
     static TRAY_READY: AtomicBool = AtomicBool::new(false);
@@ -30,10 +30,9 @@ mod imp {
     const CMD_SHOW: usize = 1001;
     const CMD_QUIT: usize = 1002;
 
-    fn load_tray_icon(instance: windows::Win32::Foundation::HINSTANCE) -> windows::Win32::UI::WindowsAndMessaging::HICON {
+    fn load_tray_icon(instance: HMODULE) -> HICON {
         unsafe {
-            // Icon embedded by build.rs / winres (resource ID 1)
-            if let Ok(icon) = LoadImageW(
+            if let Ok(handle) = LoadImageW(
                 Some(instance),
                 windows::core::PCWSTR(1usize as *const u16),
                 IMAGE_ICON,
@@ -41,7 +40,7 @@ mod imp {
                 0,
                 LR_DEFAULTSIZE,
             ) {
-                return icon;
+                return HICON(handle.0);
             }
             LoadIconW(None, IDI_APPLICATION).unwrap_or_default()
         }
@@ -61,12 +60,7 @@ mod imp {
                 }
                 WM_RBUTTONUP => {
                     let menu = CreatePopupMenu().unwrap_or_default();
-                    let _ = AppendMenuW(
-                        menu,
-                        MF_STRING,
-                        CMD_SHOW,
-                        w!("Show AirDropd"),
-                    );
+                    let _ = AppendMenuW(menu, MF_STRING, CMD_SHOW, w!("Show AirDropd"));
                     let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quit"));
                     let _ = TrackPopupMenu(
                         menu,
@@ -137,17 +131,17 @@ mod imp {
                     None,
                 );
 
-                let Ok(hwnd) = hwnd else {
+                if hwnd.0 == std::ptr::null_mut() {
                     warn!("Failed to create tray message window");
                     return;
-                };
+                }
 
                 let mut tip_buf: [u16; 128] = [0; 128];
                 for (i, c) in tip.encode_utf16().take(127).enumerate() {
                     tip_buf[i] = c;
                 }
 
-                let icon = load_tray_icon(instance.into());
+                let icon = load_tray_icon(instance);
 
                 let mut nid = NOTIFYICONDATAW {
                     cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -160,7 +154,7 @@ mod imp {
                     ..Default::default()
                 };
 
-                if Shell_NotifyIconW(NIM_ADD, &mut nid).is_ok() {
+                if Shell_NotifyIconW(NIM_ADD, &mut nid).as_bool() {
                     TRAY_READY.store(true, Ordering::SeqCst);
                     info!("System tray icon initialized");
                 } else {
@@ -202,7 +196,6 @@ mod imp {
 
     pub fn set_tooltip(tooltip: &str) {
         let _ = TOOLTIP.set(Arc::from(tooltip));
-        // Tooltip updates on next init; live modify would need stored HWND.
     }
 }
 

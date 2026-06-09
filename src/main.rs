@@ -149,8 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match AirDropdServices::new(app_config).await {
             Ok(s) => Arc::new(s),
             Err(e) => {
-                #[cfg(debug_assertions)]
-                eprintln!("Error creating services: {}", e);
+                tracing::error!("Error creating services: {}", e);
                 std::process::exit(1);
             }
         }
