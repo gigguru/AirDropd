@@ -8,7 +8,7 @@ mod imp {
     use windows::core::HSTRING;
     use windows::Devices::Bluetooth::Advertisement::{
         BluetoothLEAdvertisementPublisher, BluetoothLEAdvertisementPublisherStatus,
-        BluetoothLEManufacturerData,
+        BluetoothLEManufacturerData, IBluetoothLEAdvertisement,
     };
     use windows::Storage::Streams::DataWriter;
 

@@ -246,7 +246,6 @@ impl Application for AirDropdApp {
             }
 
             Message::SendFile(device) => {
-                let services = self.services.clone();
                 let device = device.clone();
                 Command::perform(
                     async move {
