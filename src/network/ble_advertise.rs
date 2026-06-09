@@ -14,7 +14,7 @@ mod imp {
 
     static PUBLISHER: Mutex<Option<BluetoothLEAdvertisementPublisher>> = Mutex::new(None);
 
-    fn airdrop_manufacturer_payload() -> Result<windows::Storage::Streams::IBuffer> {
+    fn airdrop_manufacturer_payload(device_hash: [u8; 6]) -> Result<windows::Storage::Streams::IBuffer> {
         let writer = DataWriter::new()?;
         // Apple company ID (little-endian on air)
         writer.WriteByte(0x4C)?;
@@ -22,9 +22,8 @@ mod imp {
         // AirDrop / Handoff proximity type
         writer.WriteByte(0x05)?;
         writer.WriteByte(0x01)?; // discoverable
-        // 6-byte device hash placeholder
-        for _ in 0..6 {
-            writer.WriteByte(0x00)?;
+        for byte in device_hash {
+            writer.WriteByte(byte)?;
         }
         writer.WriteByte(0x00)?;
         writer.WriteByte(0x00)?;
@@ -33,13 +32,15 @@ mod imp {
         writer.DetachBuffer().context("Failed to build BLE payload")
     }
 
-    pub fn start(device_name: &str) -> Result<()> {
+    pub fn start(device_name: &str, device_hash: [u8; 6]) -> Result<()> {
         let mut guard = PUBLISHER
             .lock()
             .map_err(|_| anyhow::anyhow!("BLE publisher lock poisoned"))?;
 
         if guard.is_some() {
-            return Ok(());
+            if let Some(publisher) = guard.take() {
+                let _ = publisher.Stop();
+            }
         }
 
         let publisher = BluetoothLEAdvertisementPublisher::new()?;
@@ -47,7 +48,7 @@ mod imp {
 
         advertisement.SetLocalName(&HSTRING::from(device_name))?;
 
-        let buffer = airdrop_manufacturer_payload()?;
+        let buffer = airdrop_manufacturer_payload(device_hash)?;
         let mfg = BluetoothLEManufacturerData::Create(0x004C, &buffer)?;
         advertisement.ManufacturerData()?.Append(&mfg)?;
 
@@ -79,7 +80,7 @@ mod imp {
 pub use imp::{start, stop};
 
 #[cfg(not(windows))]
-pub fn start(_device_name: &str) -> anyhow::Result<()> {
+pub fn start(_device_name: &str, _device_hash: [u8; 6]) -> anyhow::Result<()> {
     Ok(())
 }
 

@@ -232,6 +232,16 @@ impl AirDropHttpServer {
         let ask_response = serde_json::json!({
             "ReceiverModelName": "Windows,1",
             "ReceiverComputerName": broadcast_name,
+            "ReceiverMediaCapabilities": {
+                "Version": 1,
+                "Vendor": {
+                    "com.microsoft": {
+                        "OSVersion": [10, 0],
+                        "OSBuildVersion": "22000"
+                    }
+                }
+            },
+            "ConvertTo": ["com.microsoft.windows"],
         });
 
         Self::write_json_response(stream, &ask_response).await

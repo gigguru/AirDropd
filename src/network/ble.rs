@@ -208,7 +208,11 @@ impl BleManager {
         Ok(())
     }
 
-    pub async fn start_advertising_with_name(&self, device_name: &str) -> Result<()> {
+    pub async fn start_advertising_with_name(
+        &self,
+        device_name: &str,
+        device_hash: [u8; 6],
+    ) -> Result<()> {
         let mut is_advertising = self.is_advertising.lock().await;
         if *is_advertising {
             crate::network::ble_advertise::stop();
@@ -221,32 +225,36 @@ impl BleManager {
             device_name
         );
 
-        if let Err(e) = crate::network::ble_advertise::start(device_name) {
-            warn!(
-                "BLE advertising failed: {} — iPhones may not discover this PC via AirDrop",
-                e
-            );
+        match crate::network::ble_advertise::start(device_name, device_hash) {
+            Ok(()) => {
+                *self.is_advertising.lock().await = true;
+                Ok(())
+            }
+            Err(e) => {
+                warn!(
+                    "BLE advertising failed: {} — iPhones may not discover this PC via AirDrop",
+                    e
+                );
+                Err(e)
+            }
         }
-
-        *self.is_advertising.lock().await = true;
-        Ok(())
     }
 
-    pub async fn start_advertising(&self) -> Result<()> {
+    pub async fn start_advertising(&self, device_hash: [u8; 6]) -> Result<()> {
         let device_name = hostname::get()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "AirDropd".to_string());
-        self.start_advertising_with_name(&device_name).await
+        self.start_advertising_with_name(&device_name, device_hash).await
     }
 
-    pub async fn restart_advertising(&self, device_name: &str) -> Result<()> {
+    pub async fn restart_advertising(&self, device_name: &str, device_hash: [u8; 6]) -> Result<()> {
         let mut is_advertising = self.is_advertising.lock().await;
         if *is_advertising {
             crate::network::ble_advertise::stop();
             *is_advertising = false;
         }
         drop(is_advertising);
-        self.start_advertising_with_name(device_name).await
+        self.start_advertising_with_name(device_name, device_hash).await
     }
 
     pub async fn stop_advertising(&self) -> Result<()> {

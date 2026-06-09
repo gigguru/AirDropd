@@ -1,7 +1,7 @@
 use anyhow::{Result, Context, anyhow};
 use std::path::PathBuf;
 use tokio::fs::File;
-use tokio::net::{TcpStream, TcpListener, UdpSocket};
+use tokio::net::{TcpStream, TcpListener};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 use std::sync::Arc;
@@ -9,15 +9,15 @@ use serde::{Serialize, Deserialize};
 use serde_json;
 use uuid::Uuid;
 use tracing::{info, warn, error};
-use mdns_sd::{ServiceDaemon, ServiceInfo};
+use mdns_sd::ServiceInfo;
 
 use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType};
 use tokio_native_tls::{TlsAcceptor, native_tls, TlsConnector};
-use std::net::{SocketAddr, IpAddr, Ipv4Addr};
-use socket2::{Socket, Domain, Type, Protocol};
+use std::net::SocketAddr;
 use super::apple_records::AppleRecords;
 use super::http_server::AirDropHttpServer;
 use crate::config::SharedConfig;
+use crate::network::mdns_hub::SharedMdns;
 use crate::network::util::primary_ipv4;
 use mime_guess;
 
@@ -50,8 +50,8 @@ pub struct AirDrop {
     current_file: Arc<Mutex<Option<PathBuf>>>,
     transfer_progress: Arc<Mutex<f32>>,
     connection: Arc<Mutex<Option<TcpStream>>>,
-    mdns: Arc<Mutex<Option<ServiceDaemon>>>,
-    udp_socket: Arc<Mutex<Option<UdpSocket>>>,
+    mdns: SharedMdns,
+    registered_services: Arc<Mutex<Vec<String>>>,
     http_server: Arc<Mutex<Option<AirDropHttpServer>>>,
     pub status: Arc<Mutex<AirDropStatus>>,
     config: SharedConfig,
@@ -60,13 +60,17 @@ pub struct AirDrop {
 
 
 impl AirDrop {
-    pub fn new(config: SharedConfig, received_tx: tokio::sync::broadcast::Sender<PathBuf>) -> Self {
+    pub fn new(
+        config: SharedConfig,
+        received_tx: tokio::sync::broadcast::Sender<PathBuf>,
+        mdns: SharedMdns,
+    ) -> Self {
         Self {
             current_file: Arc::new(Mutex::new(None)),
             transfer_progress: Arc::new(Mutex::new(0.0)),
             connection: Arc::new(Mutex::new(None)),
-            mdns: Arc::new(Mutex::new(None)),
-            udp_socket: Arc::new(Mutex::new(None)),
+            mdns,
+            registered_services: Arc::new(Mutex::new(Vec::new())),
             http_server: Arc::new(Mutex::new(None)),
             status: Arc::new(Mutex::new(AirDropStatus::Idle)),
             config,
@@ -81,24 +85,117 @@ impl AirDrop {
             .unwrap_or_else(|_| crate::config::default_broadcast_name())
     }
 
-    fn mdns_instance_name(name: &str) -> String {
-        let sanitized: String = name
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' {
-                    c
-                } else if c.is_whitespace() {
-                    '-'
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if sanitized.is_empty() {
-            "AirDropd".to_string()
-        } else {
-            sanitized
+    fn mdns_instance_name() -> String {
+        hostname::get()
+            .ok()
+            .map(|h| h.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "AirDropd".to_string())
+            .replace(' ', "-")
+    }
+
+    async fn unregister_all(&self) {
+        let names: Vec<String> = {
+            let mut guard = self.registered_services.lock().await;
+            std::mem::take(&mut *guard)
+        };
+        for name in names {
+            if let Err(e) = self.mdns.unregister(&name) {
+                warn!("Failed to unregister mDNS service {}: {}", name, e);
+            }
         }
+    }
+
+    /// Re-publish mDNS records after settings or visibility changes.
+    pub async fn refresh_advertising(&self) -> Result<()> {
+        self.unregister_all().await;
+        self.register_mdns_services().await
+    }
+
+    async fn register_mdns_services(&self) -> Result<()> {
+        let (broadcast_name, device_ph, device_id, discoverable) = {
+            let cfg = self
+                .config
+                .read()
+                .map_err(|_| anyhow!("config lock poisoned"))?;
+            (
+                cfg.broadcast_name.clone(),
+                cfg.device_ph.clone(),
+                cfg.device_id.clone(),
+                cfg.discoverable,
+            )
+        };
+
+        if !discoverable {
+            info!("AirDrop mDNS advertising paused (discoverable off)");
+            return Ok(());
+        }
+
+        let instance = Self::mdns_instance_name();
+        let airdrop_properties = AppleRecords::create_airdrop_txt_records_with_name(
+            &broadcast_name,
+            &device_ph,
+            discoverable,
+        )?;
+        let companion_properties = AppleRecords::create_companion_txt_records_with_name(
+            &broadcast_name,
+            &device_id,
+            &device_ph,
+        )?;
+        let device_info_properties = AppleRecords::create_device_info_txt_records(&device_ph)?;
+
+        let host_fqdn = format!("{}.local.", instance);
+        let ip = primary_ipv4()?.to_string();
+
+        let services = [
+            ServiceInfo::new(
+                "_airdrop._tcp.local.",
+                &instance,
+                &host_fqdn,
+                &ip,
+                8770,
+                Some(airdrop_properties.clone()),
+            )?,
+            ServiceInfo::new(
+                "_airdrop._udp.local.",
+                &instance,
+                &host_fqdn,
+                &ip,
+                8770,
+                Some(airdrop_properties),
+            )?,
+            ServiceInfo::new(
+                "_companion-link._tcp.local.",
+                &instance,
+                &host_fqdn,
+                &ip,
+                7001,
+                Some(companion_properties),
+            )?,
+            ServiceInfo::new(
+                "_device-info._tcp.local.",
+                &instance,
+                &host_fqdn,
+                &ip,
+                7002,
+                Some(device_info_properties),
+            )?,
+        ];
+
+        let mut registered = self.registered_services.lock().await;
+        for service in services {
+            let fullname = service.get_fullname().to_string();
+            self.mdns
+                .register(service)
+                .map_err(|e| anyhow!("Failed to register mDNS service {}: {}", fullname, e))?;
+            registered.push(fullname);
+        }
+
+        info!(
+            "Registered mDNS services as \"{}\" ({}) on {}",
+            broadcast_name, host_fqdn, ip
+        );
+        Ok(())
     }
 
     pub async fn send_file_to(&self, addr: SocketAddr, file_path: PathBuf) -> Result<()> {
@@ -171,120 +268,6 @@ impl AirDrop {
 
     pub async fn get_status(&self) -> AirDropStatus {
         self.status.lock().await.clone()
-    }
-
-    async fn setup_multicast() -> Result<UdpSocket> {
-        // Create socket with socket2 for more control
-        let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-        
-        // Set socket options
-        socket.set_reuse_address(true)?;
-        socket.set_multicast_loop_v4(true)?;
-        socket.set_multicast_ttl_v4(255)?;
-        socket.set_broadcast(true)?;
-
-        
-        // Bind to mDNS port
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 7000);  // Changed to 7000
-        socket.bind(&addr.into())?;
-        
-        // Join multicast group on all interfaces
-        let multicast_addr: Ipv4Addr = "224.0.0.251".parse()?;
-        let interfaces = local_ip_address::list_afinet_netifas()?;
-        
-        for (name, ip) in interfaces {
-            if let IpAddr::V4(interface_addr) = ip {
-                // Skip loopback, multicast, and link-local addresses (169.254.x.x)
-                if !ip.is_loopback() && !ip.is_multicast() && !interface_addr.is_link_local() {  
-                    info!("Joining multicast group on interface {} ({})", name, interface_addr);
-                    if let Err(e) = socket.join_multicast_v4(&multicast_addr, &interface_addr) {
-                        warn!("Failed to join multicast on {}: {}", name, e);
-                    }
-                }
-            }
-        }
-        
-        // Convert to tokio UdpSocket
-        let std_socket: std::net::UdpSocket = socket.into();
-        std_socket.set_nonblocking(true)?;
-        Ok(UdpSocket::from_std(std_socket)?)
-    }
-
-
-
-    async fn register_mdns_services(&self) -> Result<()> {
-        let mdns = ServiceDaemon::new().map_err(|e| anyhow!("Failed to initialize mDNS: {}", e))?;
-
-        let broadcast_name = self.broadcast_name();
-        let instance = Self::mdns_instance_name(&broadcast_name);
-
-        let airdrop_properties =
-            AppleRecords::create_airdrop_txt_records_with_name(&broadcast_name)?;
-        let companion_properties =
-            AppleRecords::create_companion_txt_records_with_name(&broadcast_name)?;
-        let device_info_properties = AppleRecords::create_device_info_txt_records()?;
-
-        let hostname = hostname::get()?.to_string_lossy().to_string();
-        let host_fqdn = format!("{}.local.", hostname);
-        let ip = primary_ipv4()?.to_string();
-
-        let airdrop_tcp_service = ServiceInfo::new(
-            "_airdrop._tcp.local.",
-            &instance,
-            &host_fqdn,
-            &ip,
-            8770,
-            Some(airdrop_properties.clone()),
-        )?;
-
-        let airdrop_udp_service = ServiceInfo::new(
-            "_airdrop._udp.local.",
-            &instance,
-            &host_fqdn,
-            &ip,
-            8770,
-            Some(airdrop_properties)
-        )?;
-
-        let companion_service = ServiceInfo::new(
-            "_companion-link._tcp.local.",
-            &instance,
-            &host_fqdn,
-            &ip,
-            7001,
-            Some(companion_properties)
-        )?;
-
-        let device_info_service = ServiceInfo::new(
-            "_device-info._tcp.local.",
-            &instance,
-            &host_fqdn,
-            &ip,
-            7002,
-            Some(device_info_properties)
-        )?;
-
-        // Register all services
-        mdns.register(airdrop_tcp_service)
-            .map_err(|e| anyhow!("Failed to register AirDrop TCP service: {}", e))?;
-        mdns.register(airdrop_udp_service)
-            .map_err(|e| anyhow!("Failed to register AirDrop UDP service: {}", e))?;
-        mdns.register(companion_service)
-            .map_err(|e| anyhow!("Failed to register Companion Link service: {}", e))?;
-        mdns.register(device_info_service)
-            .map_err(|e| anyhow!("Failed to register Device Info service: {}", e))?;
-
-        info!(
-            "Registered mDNS services as \"{}\" on {} ({})",
-            broadcast_name, host_fqdn, ip
-        );
-        *self.mdns.lock().await = Some(mdns);
-
-        // Setup UDP multicast with explicit binding to all interfaces
-        let socket = Self::setup_multicast().await?;
-        *self.udp_socket.lock().await = Some(socket);
-
-        Ok(())
     }
 
     async fn generate_certificate() -> Result<(native_tls::Identity, String)> {

@@ -410,22 +410,22 @@ impl Application for AirDropdApp {
                 let services = self.services.clone();
                 Command::perform(
                     async move {
-                        let ble = services.ble.lock().await;
-                        match visibility {
-                            views::settings_view::AirDropVisibility::ReceivingOff => {
-                                let _ = ble.stop_advertising().await;
-                            }
-                            _ => {
-                                let name = services
-                                    .config
-                                    .read()
-                                    .map(|c| c.broadcast_name.clone())
-                                    .unwrap_or_else(|_| crate::config::default_broadcast_name());
-                                let _ = ble.start_advertising_with_name(&name).await;
-                            }
+                        let discoverable =
+                            visibility != views::settings_view::AirDropVisibility::ReceivingOff;
+                        {
+                            let mut cfg = services
+                                .config
+                                .write()
+                                .map_err(|_| "config lock poisoned".to_string())?;
+                            cfg.discoverable = discoverable;
+                            cfg.save().map_err(|e| e.to_string())?;
                         }
+                        services.apply_settings().await.map_err(|e| e.to_string())
                     },
-                    |_| Message::RefreshDevices,
+                    |res| match res {
+                        Ok(()) => Message::RefreshDevices,
+                        Err(e) => Message::Error(e),
+                    },
                 )
             }
 
@@ -843,6 +843,7 @@ impl AirDropdApp {
         services: Arc<crate::AirDropdServices>,
     ) -> Vec<crate::network::DiscoveredDevice> {
         let mut by_key: HashMap<String, crate::network::DiscoveredDevice> = HashMap::new();
+        let mut by_name: HashMap<String, String> = HashMap::new();
 
         if let Ok(devices) = services.device_discovery.lock().await.get_devices().await {
             for device in devices {
@@ -850,6 +851,9 @@ impl AirDropdApp {
                     continue;
                 }
                 let key = format!("{}:{}", device.address, device.port);
+                if device.port > 0 {
+                    by_name.insert(device.name.to_lowercase(), key.clone());
+                }
                 by_key.insert(key, device);
             }
         }
@@ -857,6 +861,9 @@ impl AirDropdApp {
         let ble_devices = services.ble.lock().await.get_discovered_devices().await;
         for ble in ble_devices {
             if ble.name.is_empty() {
+                continue;
+            }
+            if by_name.contains_key(&ble.name.to_lowercase()) {
                 continue;
             }
             let key = format!("ble:{}", ble.id);

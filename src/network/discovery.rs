@@ -1,4 +1,4 @@
-use mdns_sd::{ServiceDaemon, ServiceEvent};
+use mdns_sd::ServiceEvent;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use anyhow::Result;
@@ -8,6 +8,7 @@ use tracing::{info, error, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use socket2::{Socket, Domain, Type, Protocol};
 use super::interface::NetworkManager;
+use super::mdns_hub::SharedMdns;
 use super::util::friendly_name;
 
 #[derive(Clone, Debug)]
@@ -58,7 +59,7 @@ pub enum ServiceType {
 
 #[allow(dead_code)]
 pub struct DeviceDiscovery {
-	mdns: Arc<ServiceDaemon>,
+	mdns: SharedMdns,
 	devices: Arc<Mutex<HashMap<String, DiscoveredDevice>>>,
 	running: Arc<AtomicBool>,
 	network_manager: NetworkManager,
@@ -105,23 +106,17 @@ impl DeviceDiscovery {
 		Ok(())
 	}
 
-	pub fn new() -> Result<Self> {
+	pub fn new(mdns: SharedMdns) -> Result<Self> {
 		info!("Initializing device discovery service");
 		
-		// Initialize network manager
 		let mut network_manager = NetworkManager::new()?;
 		network_manager.initialize()?;
 
-		// Initialize mDNS
-		let mdns = ServiceDaemon::new()?;
-		info!("Successfully created mDNS service daemon");
-
-		// Join multicast group for mDNS
 		let multicast_addr: Ipv4Addr = "224.0.0.251".parse()?;
 		network_manager.join_multicast_group(multicast_addr)?;
 
 		Ok(Self {
-			mdns: Arc::new(mdns),
+			mdns,
 			devices: Arc::new(Mutex::new(HashMap::new())),
 			running: Arc::new(AtomicBool::new(false)),
 			network_manager,
@@ -142,6 +137,8 @@ impl DeviceDiscovery {
 			"_airdrop._tcp.local.",
 			"_companion-link._tcp.local.",
 			"_device-info._tcp.local.",
+			"_apple-mobdev2._tcp.local.",
+			"_rdlink._tcp.local.",
 		];
 
 		for &service_type in &service_types {
@@ -176,7 +173,13 @@ impl DeviceDiscovery {
 														(prop.key().to_string(), prop.val_str().to_string())
 													}).collect(),
 												};
-												devices.insert(device.name.clone(), device);
+												let key = format!(
+													"{}:{}:{}",
+													info.get_fullname(),
+													addr,
+													info.get_port()
+												);
+												devices.insert(key, device);
 											}
 										}
 									}

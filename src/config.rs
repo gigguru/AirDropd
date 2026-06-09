@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -15,6 +16,19 @@ pub struct AppConfig {
     pub download_dir: PathBuf,
     /// When true, minimizing or closing hides to the system tray instead of exiting.
     pub minimize_to_tray: bool,
+    /// Stable 12-char hex identity hash (`ph` in Apple mDNS TXT records).
+    #[serde(default = "AppConfig::generate_device_ph")]
+    pub device_ph: String,
+    /// Stable device identifier for companion-link records.
+    #[serde(default = "AppConfig::generate_device_id")]
+    pub device_id: String,
+    /// Whether this PC advertises itself for incoming AirDrop transfers.
+    #[serde(default = "default_discoverable")]
+    pub discoverable: bool,
+}
+
+fn default_discoverable() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -23,14 +37,57 @@ impl Default for AppConfig {
             broadcast_name: default_broadcast_name(),
             download_dir: default_download_dir(),
             minimize_to_tray: true,
+            device_ph: Self::generate_device_ph(),
+            device_id: Self::generate_device_id(),
+            discoverable: true,
         }
     }
 }
 
 impl AppConfig {
+    pub fn generate_device_ph() -> String {
+        let seed = hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "AirDropd".to_string());
+        let mut hasher = Sha256::new();
+        hasher.update(seed.as_bytes());
+        hasher.update(b"AirDropd-ph-v1");
+        hex::encode(&hasher.finalize()[..6])
+    }
+
+    pub fn generate_device_id() -> String {
+        uuid::Uuid::new_v4().simple().to_string().to_uppercase()
+    }
+
+    pub fn device_ph_bytes(&self) -> [u8; 6] {
+        let mut out = [0u8; 6];
+        let bytes = hex::decode(&self.device_ph).unwrap_or_else(|_| {
+            hex::decode(Self::generate_device_ph()).unwrap_or_default()
+        });
+        for (i, b) in bytes.into_iter().take(6).enumerate() {
+            out[i] = b;
+        }
+        out
+    }
+
+    pub fn ensure_identity(&mut self) {
+        if self.device_ph.len() != 12 {
+            self.device_ph = Self::generate_device_ph();
+        }
+        if self.device_id.is_empty() {
+            self.device_id = Self::generate_device_id();
+        }
+        if self.broadcast_name.trim().is_empty() {
+            self.broadcast_name = default_broadcast_name();
+        }
+    }
+
     pub fn load() -> Self {
         match Self::load_from_disk() {
-            Ok(cfg) => cfg,
+            Ok(mut cfg) => {
+                cfg.ensure_identity();
+                cfg
+            }
             Err(e) => {
                 tracing::warn!("Using default config ({})", e);
                 Self::default()
@@ -41,12 +98,14 @@ impl AppConfig {
     pub fn load_from_disk() -> Result<Self> {
         let path = config_path();
         if !path.exists() {
-            let cfg = Self::default();
+            let mut cfg = Self::default();
+            cfg.ensure_identity();
             cfg.save()?;
             return Ok(cfg);
         }
         let text = std::fs::read_to_string(&path)?;
-        let cfg: AppConfig = toml::from_str(&text).context("parse config.toml")?;
+        let mut cfg: AppConfig = toml::from_str(&text).context("parse config.toml")?;
+        cfg.ensure_identity();
         Ok(cfg)
     }
 
@@ -60,7 +119,6 @@ impl AppConfig {
         Ok(())
     }
 
-    /// Directory where incoming AirDrop files are stored (`…/AirDropd/`).
     pub fn receive_dir(&self) -> PathBuf {
         self.download_dir.join("AirDropd")
     }
@@ -111,7 +169,6 @@ pub fn default_broadcast_name() -> String {
         .unwrap_or_else(|| "AirDropd".to_string())
 }
 
-/// Pick a unique destination path inside the receive folder.
 pub fn unique_receive_path(receive_dir: &Path, filename: &str) -> PathBuf {
     let safe: String = filename
         .chars()

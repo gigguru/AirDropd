@@ -12,8 +12,9 @@ mod ui;
 mod utils;
 
 use config::{shared, AppConfig};
-use network::discovery::DeviceDiscovery;
 use network::ble::BleManager;
+use network::discovery::DeviceDiscovery;
+use network::mdns_hub::{self, SharedMdns};
 use protocols::airdrop::AirDrop;
 use protocols::airplay::AirPlay;
 use protocols::awdl::{AwdlManager, AwdlManagerConfig};
@@ -22,6 +23,7 @@ use std::path::PathBuf;
 /// Core background services for AirDropd.
 pub struct AirDropdServices {
     pub config: config::SharedConfig,
+    pub mdns: SharedMdns,
     pub device_discovery: Arc<Mutex<DeviceDiscovery>>,
     pub airdrop: Arc<Mutex<AirDrop>>,
     pub airplay: Arc<Mutex<AirPlay>>,
@@ -33,15 +35,17 @@ pub struct AirDropdServices {
 impl AirDropdServices {
     pub async fn new(app_config: config::SharedConfig) -> anyhow::Result<Self> {
         let (received_tx, _) = tokio::sync::broadcast::channel(16);
+        let mdns = mdns_hub::create_shared_mdns()?;
 
-        let discovery = DeviceDiscovery::new()?;
-        let airdrop = AirDrop::new(app_config.clone(), received_tx.clone());
+        let discovery = DeviceDiscovery::new(mdns.clone())?;
+        let airdrop = AirDrop::new(app_config.clone(), received_tx.clone(), mdns.clone());
         let airplay = AirPlay::new();
         let ble = BleManager::new().await?;
         let awdl = AwdlManager::new(AwdlManagerConfig::default());
 
         Ok(Self {
             config: app_config,
+            mdns,
             device_discovery: Arc::new(Mutex::new(discovery)),
             airdrop: Arc::new(Mutex::new(airdrop)),
             airplay: Arc::new(Mutex::new(airplay)),
@@ -68,15 +72,23 @@ impl AirDropdServices {
         }
 
         {
-            let broadcast_name = self
+            let (broadcast_name, device_hash, discoverable) = self
                 .config
                 .read()
-                .map(|c| c.broadcast_name.clone())
-                .unwrap_or_else(|_| config::default_broadcast_name());
+                .map(|c| (c.broadcast_name.clone(), c.device_ph_bytes(), c.discoverable))
+                .unwrap_or_else(|_| (config::default_broadcast_name(), [0u8; 6], true));
 
             let mut ble = self.ble.lock().await;
-            ble.initialize().await?;
-            ble.start_advertising_with_name(&broadcast_name).await?;
+            if let Err(e) = ble.initialize().await {
+                tracing::warn!("BLE unavailable ({}); continuing without BLE discovery", e);
+            } else if discoverable {
+                if let Err(e) = ble
+                    .start_advertising_with_name(&broadcast_name, device_hash)
+                    .await
+                {
+                    tracing::warn!("BLE advertising failed: {}", e);
+                }
+            }
         }
 
         {
@@ -92,17 +104,26 @@ impl AirDropdServices {
         Ok(())
     }
 
-    /// Apply saved settings to live discovery services (BLE name, etc.).
+    /// Apply saved settings to live discovery services (mDNS + BLE).
     pub async fn apply_settings(&self) -> anyhow::Result<()> {
-        let broadcast_name = self
+        let (broadcast_name, device_hash, discoverable) = self
             .config
             .read()
-            .map(|c| c.broadcast_name.clone())
-            .unwrap_or_else(|_| config::default_broadcast_name());
+            .map(|c| (c.broadcast_name.clone(), c.device_ph_bytes(), c.discoverable))
+            .unwrap_or_else(|_| (config::default_broadcast_name(), [0; 6], true));
+
+        {
+            let airdrop = self.airdrop.lock().await;
+            airdrop.refresh_advertising().await?;
+        }
 
         {
             let ble = self.ble.lock().await;
-            ble.restart_advertising(&broadcast_name).await?;
+            if discoverable {
+                ble.restart_advertising(&broadcast_name, device_hash).await?;
+            } else {
+                let _ = ble.stop_advertising().await;
+            }
         }
 
         Ok(())
