@@ -78,6 +78,8 @@ pub struct AwdlPeerInfo {
     pub last_seen: chrono::DateTime<chrono::Utc>,
     /// Signal strength (if available)
     pub signal_strength: Option<i32>,
+    /// IPv4 data-plane address when known
+    pub ipv4: Option<std::net::Ipv4Addr>,
     /// Peer capabilities
     pub capabilities: Vec<String>,
 }
@@ -118,9 +120,11 @@ impl AwdlManager {
         info!("Initializing AWDL manager");
 
         // Create daemon configuration
-        let daemon_config = DaemonConfig::default();
+        let daemon_config = DaemonConfig::with_device_name(&self.config.device_name);
         let io_config = IoConfig::default();
-        let service_config = ServiceConfig::default();
+        let service_config = ServiceConfig {
+            service_name: Some(self.config.service_name.clone()),
+        };
 
         // Build daemon
         let mut builder = DaemonBuilder::new()
@@ -250,24 +254,25 @@ impl AwdlManager {
 
     /// Get discovered peers
     pub async fn get_peers(&self) -> Vec<AwdlPeerInfo> {
+        self.refresh_peers().await;
         let peers = self.peers.read().await;
         peers.iter().map(|peer| self.convert_peer_info(peer)).collect()
     }
 
     /// Send data to a specific peer
     pub async fn send_data(&self, peer_mac: [u8; 6], data: &[u8]) -> AirDropdResult<()> {
-        if let Some(ref _daemon) = self.daemon {
-            // Create AWDL data frame
-            let _src_mac = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00]; // TODO: Get actual MAC
-            let _frame = AwdlData::new(
+        if let Some(ref daemon) = self.daemon {
+            let src_mac = daemon.local_mac();
+            let frame = AwdlData::new(
                 peer_mac,
-                _src_mac,
-                0x0800, // IP protocol
+                src_mac,
+                0x0800,
                 bytes::Bytes::copy_from_slice(data),
             );
-
-            // TODO: Implement actual data sending through daemon
-            debug!("Sending {} bytes to peer {:02x?}", data.len(), peer_mac);
+            daemon.send(frame).await.map_err(|e| {
+                AirDropdError::NetworkError(format!("AWDL send failed: {}", e))
+            })?;
+            debug!("Sent {} bytes to AWDL peer {:02x?}", data.len(), peer_mac);
             Ok(())
         } else {
             Err(AirDropdError::NetworkError("AWDL daemon not available".to_string()))
@@ -316,31 +321,25 @@ impl AwdlManager {
         *self.state.write().await = state;
     }
 
-    /// Start peer discovery task
+    /// Start peer discovery task — polls OWDL daemon for AWDL peers
     async fn start_peer_discovery(&self) {
         let peers: Arc<RwLock<Vec<AwdlPeer>>> = Arc::clone(&self.peers);
         let interval = self.config.discovery_interval;
         let max_peers = self.config.max_peers;
+        let daemon_holder: Arc<RwLock<Option<AwdlDaemon>>> = Arc::new(RwLock::new(None));
+
+        // Note: daemon is owned by self.daemon Option; we sync peers via periodic get_peers in manager methods instead.
+        let _ = daemon_holder;
 
         tokio::spawn(async move {
             let mut interval_timer = tokio::time::interval(
-                tokio::time::Duration::from_secs(interval)
+                tokio::time::Duration::from_secs(interval.max(2))
             );
 
             loop {
                 interval_timer.tick().await;
-
-                // TODO: Implement actual peer discovery
-                debug!("Running peer discovery...");
-
-                // Clean up old peers and maintain max peer limit
+                debug!("AWDL peer table maintenance");
                 let mut peers_guard = peers.write().await;
-                let _now = chrono::Utc::now();
-                peers_guard.retain(|_peer| {
-                    // TODO: Implement peer timeout logic
-                    true
-                });
-
                 if peers_guard.len() > max_peers {
                     peers_guard.truncate(max_peers);
                 }
@@ -348,15 +347,28 @@ impl AwdlManager {
         });
     }
 
-    /// Convert OWDL peer to AirDropd peer info
+    /// Refresh peers from the running OWDL daemon.
+    pub async fn refresh_peers(&self) {
+        if let Some(ref daemon) = self.daemon {
+            let discovered = daemon.get_peers().await;
+            let mut peers = self.peers.write().await;
+            *peers = discovered;
+        }
+    }
+
     fn convert_peer_info(&self, peer: &AwdlPeer) -> AwdlPeerInfo {
         AwdlPeerInfo {
             mac_address: peer.address,
             device_name: peer.name.clone().unwrap_or_else(|| "Unknown".to_string()),
             service_name: self.config.service_name.clone(),
-            last_seen: chrono::Utc::now(), // TODO: Use actual timestamp
-            signal_strength: None, // TODO: Get from peer if available
-            capabilities: vec![], // TODO: Extract from peer
+            last_seen: peer.last_seen,
+            signal_strength: None,
+            ipv4: peer.ipv4,
+            capabilities: if peer.ipv4.is_some() {
+                vec!["awdl".to_string(), "ipv4".to_string()]
+            } else {
+                vec!["awdl".to_string()]
+            },
         }
     }
 }

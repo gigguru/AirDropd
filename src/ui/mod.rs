@@ -6,8 +6,11 @@
 use iced::{
     executor,
     Application, Command, Element, Settings, Subscription, Theme as IcedTheme,
+    time,
 };
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 // Moduli pub mod app;
@@ -29,8 +32,10 @@ pub enum Theme {
 }
  
 /// Struttura principale dell'applicazione AirDropd
-#[derive(Debug)]
 pub struct AirDropdApp {
+    /// Background services (mDNS, BLE, AirDrop server)
+    services: Arc<crate::AirDropdServices>,
+
     /// Stato corrente dell'applicazione
     current_view: AppView,
     
@@ -103,10 +108,11 @@ impl Application for AirDropdApp {
     type Message = Message;
     type Theme = IcedTheme;
     type Executor = executor::Default;
-    type Flags = ();
+    type Flags = Arc<crate::AirDropdServices>;
 
-    fn new(_flags: Self::Flags) -> (Self, Command<Self::Message>) {
+    fn new(services: Self::Flags) -> (Self, Command<Self::Message>) {
         let app = Self {
+            services,
             current_view: AppView::Loading,
             status_message: "Initializing...".to_string(),
             is_loading: true,
@@ -184,10 +190,30 @@ impl Application for AirDropdApp {
                 self.is_scanning = true;
                 self.status_message = "Scanning for devices...".to_string();
                 
+                let services = self.services.clone();
                 Command::perform(
-                    Self::scan_devices(),
+                    Self::fetch_devices(services),
                     Message::DevicesUpdated,
                 )
+            }
+
+            Message::RefreshDevices => {
+                let services = self.services.clone();
+                Command::perform(
+                    Self::fetch_devices(services),
+                    Message::DevicesRefreshed,
+                )
+            }
+
+            Message::DevicesRefreshed(devices) => {
+                self.discovered_devices = devices;
+                if !self.is_scanning {
+                    self.status_message = format!(
+                        "Found {} devices",
+                        self.discovered_devices.len()
+                    );
+                }
+                Command::none()
             }
 
             Message::StopScanning => {
@@ -203,18 +229,6 @@ impl Application for AirDropdApp {
                     "Found {} devices",
                     self.discovered_devices.len()
                 );
-                
-                if !self.discovered_devices.is_empty() {
-                    self.add_notification(
-                        "Devices found".to_string(),
-                        format!(
-                            "Discovered {} nearby Apple devices",
-                            self.discovered_devices.len()
-                        ),
-                        messages::NotificationType::Success,
-                    );
-                }
-                
                 Command::none()
             }
 
@@ -231,18 +245,29 @@ impl Application for AirDropdApp {
                 Command::none()
             }
 
-            Message::SendFile(_device) => {
-                if self.selected_device.is_some() {
-                    self.airdrop_status = crate::protocols::airdrop::AirDropStatus::Transferring(0.0);
-                    self.file_transfer_progress = Some(0.0);
-                    
-                    Command::perform(
-                        Self::simulate_file_transfer(),
-                        Message::FileSendProgress,
-                    )
-                } else {
-                    Command::none()
-                }
+            Message::SendFile(device) => {
+                let services = self.services.clone();
+                let device = device.clone();
+                Command::perform(
+                    async move {
+                        use rfd::AsyncFileDialog;
+                        let file = AsyncFileDialog::new().pick_file().await;
+                        let Some(handle) = file else {
+                            return Err("No file selected".to_string());
+                        };
+                        let path = handle.path().to_path_buf();
+                        let port = if device.port > 0 { device.port } else { 8770 };
+                        let addr = std::net::SocketAddr::new(device.address, port);
+                        crate::protocols::airdrop_client::AirDropClient::send_file(addr, &path)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        Ok::<(), String>(())
+                    },
+                    |res| match res {
+                        Ok(()) => Message::FileSendCompleted(Ok(())),
+                        Err(e) => Message::FileSendCompleted(Err(e)),
+                    },
+                )
             }
 
             Message::SendLink(device, url) => {
@@ -359,7 +384,21 @@ impl Application for AirDropdApp {
             
             Message::VisibilityChanged(visibility) => {
                 self.discovery_visibility = visibility;
-                Command::none()
+                let services = self.services.clone();
+                Command::perform(
+                    async move {
+                        let ble = services.ble.lock().await;
+                        match visibility {
+                            views::settings_view::AirDropVisibility::ReceivingOff => {
+                                let _ = ble.stop_advertising().await;
+                            }
+                            _ => {
+                                let _ = ble.start_advertising().await;
+                            }
+                        }
+                    },
+                    |_| Message::RefreshDevices,
+                )
             }
 
             // Handle all other message variants with a wildcard pattern
@@ -377,8 +416,11 @@ impl Application for AirDropdApp {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        // Subscription per aggiornamenti periodici se necessario
-        Subscription::none()
+        if matches!(self.current_view, AppView::Main) {
+            time::every(Duration::from_secs(3)).map(|_| Message::RefreshDevices)
+        } else {
+            Subscription::none()
+        }
     }
 
     fn theme(&self) -> Self::Theme {
@@ -422,35 +464,53 @@ impl AirDropdApp {
         self.about_view.view(&self.theme)
     }
   
-    /// Simula la scansione dei dispositivi nella rete
-    async fn scan_devices() -> Vec<crate::network::DiscoveredDevice> {
-        // Simula una pausa per la scansione
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        
-        // Dispositivi di esempio per il testing
-        vec![
-            crate::network::DiscoveredDevice {
-                name: "Marco's iPhone".to_string(),
-                address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192,168,1,100)),
-                port: 8771,
+    /// Fetch discovered Apple devices from mDNS and BLE.
+    async fn fetch_devices(
+        services: Arc<crate::AirDropdServices>,
+    ) -> Vec<crate::network::DiscoveredDevice> {
+        let mut by_key: HashMap<String, crate::network::DiscoveredDevice> = HashMap::new();
+
+        if let Ok(devices) = services.device_discovery.lock().await.get_devices().await {
+            for device in devices {
+                if device.name.is_empty() {
+                    continue;
+                }
+                let key = format!("{}:{}", device.address, device.port);
+                by_key.insert(key, device);
+            }
+        }
+
+        let ble_devices = services.ble.lock().await.get_discovered_devices().await;
+        for ble in ble_devices {
+            if ble.name.is_empty() {
+                continue;
+            }
+            let key = format!("ble:{}", ble.id);
+            by_key.entry(key).or_insert(crate::network::DiscoveredDevice {
+                name: ble.name,
+                address: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+                port: 0,
                 service_type: crate::network::ServiceType::AirDrop,
-                txt_records: std::collections::HashMap::new(),
-            },
-            crate::network::DiscoveredDevice {
-                name: "iPad Pro".to_string(),
-                address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192,168,1,101)),
-                port: 7100,
-                service_type: crate::network::ServiceType::AirPlay,
-                txt_records: std::collections::HashMap::new(),
-            },
-            crate::network::DiscoveredDevice {
-                name: "MacBook Pro".to_string(),
-                address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192,168,1,102)),
-                port: 8771,
+                txt_records: HashMap::new(),
+            });
+        }
+
+        let awdl = services.awdl.lock().await;
+        for peer in awdl.get_peers().await {
+            let ip = peer.ipv4.unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
+            let key = format!("awdl:{}", peer.mac_address.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+            by_key.entry(key).or_insert(crate::network::DiscoveredDevice {
+                name: peer.device_name,
+                address: std::net::IpAddr::V4(ip),
+                port: 8770,
                 service_type: crate::network::ServiceType::AirDrop,
-                txt_records: std::collections::HashMap::new(),
-            },
-        ]
+                txt_records: HashMap::new(),
+            });
+        }
+
+        let mut devices: Vec<_> = by_key.into_values().collect();
+        devices.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        devices
     }
 
     /// Simula il trasferimento di un file
@@ -488,14 +548,17 @@ impl AirDropdApp {
 }
 
 /// Funzione principale per avviare l'applicazione
-pub fn run() -> iced::Result {
+pub fn run(services: Arc<crate::AirDropdServices>) -> iced::Result {
     // Prefer DirectX 12 backend on Windows to avoid Vulkan validation spam
     // and disable extra WGPU validation layers in release usage.
     // These can be overridden by user environment variables if needed.
     std::env::set_var("WGPU_BACKEND", "dx12");
     std::env::set_var("WGPU_VALIDATION", "0");
 
-    let settings = Settings {
+    AirDropdApp::run(Settings {
+        flags: services,
+        id: None,
+        fonts: Vec::new(),
         window: iced::window::Settings {
             size: iced::Size::new(680.0, 560.0),
             min_size: Some(iced::Size::new(560.0, 480.0)),
@@ -509,10 +572,7 @@ pub fn run() -> iced::Result {
         default_font: iced::Font::DEFAULT,
         default_text_size: iced::Pixels(13.0),
         antialiasing: true,
-        ..Default::default()
-    };
-
-    AirDropdApp::run(settings)
+    })
 }
 
 /// Avvia l'applicazione AirDropd con i servizi forniti
@@ -523,7 +583,10 @@ pub async fn run_app(
     std::env::set_var("WGPU_BACKEND", "dx12");
     std::env::set_var("WGPU_VALIDATION", "0");
 
-    let settings = Settings {
+    AirDropdApp::run(Settings {
+        flags: _services,
+        id: None,
+        fonts: Vec::new(),
         window: iced::window::Settings {
             size: iced::Size::new(680.0, 560.0),
             min_size: Some(iced::Size::new(560.0, 480.0)),
@@ -537,10 +600,7 @@ pub async fn run_app(
         antialiasing: true,
         default_font: iced::Font::DEFAULT,
         default_text_size: iced::Pixels(14.0),
-        ..Default::default()
-    };
-    
-    AirDropdApp::run(settings)?;
+    })?;
     Ok(())
 }
 

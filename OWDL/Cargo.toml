@@ -1,8 +1,12 @@
 [package]
 name = "OWDL"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Open Wireless Direct Link — AWDL protocol stub for AirDropd"
+description = "Open Wireless Direct Link — AWDL protocol implementation for AirDropd"
+
+[features]
+default = []
+raw80211 = ["pcap"]
 
 [dependencies]
 anyhow = "1.0"
@@ -14,13 +18,16 @@ chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 hashbrown = "0.14"
 indexmap = "2.0"
+local-ip-address = "0.5"
 rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+socket2 = { version = "0.5", features = ["all"] }
 thiserror = "1.0"
 tokio = { version = "1.28", features = ["full"] }
 tracing = "0.1"
 uuid = { version = "1.3", features = ["v4", "serde"] }
+pcap = { version = "2.0", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

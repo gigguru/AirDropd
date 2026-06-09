@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "OWDL"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -16,9 +16,11 @@ dependencies = [
  "hashbrown 0.14.5",
  "indexmap",
  "libc",
+ "local-ip-address",
  "rand",
  "serde",
  "serde_json",
+ "socket2 0.5.8",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

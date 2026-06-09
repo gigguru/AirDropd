@@ -404,6 +404,12 @@ pub fn device_bubble<'a>(
         styles::colors::TEXT_PRIMARY_LIGHT
     };
 
+    let display_name = if device_name.len() > 14 {
+        format!("{}…", &device_name[..13])
+    } else {
+        device_name.to_string()
+    };
+
     button(
         column![
             container(
@@ -424,7 +430,7 @@ pub fn device_bubble<'a>(
                 ..Default::default()
             }),
             Space::with_height(6),
-            text(device_name)
+            text(display_name)
                 .size(11)
                 .style(name_color)
                 .horizontal_alignment(iced::alignment::Horizontal::Center),

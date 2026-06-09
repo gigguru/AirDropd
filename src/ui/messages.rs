@@ -21,6 +21,8 @@ pub enum Message {
     StartScanning,
     StopScanning,
     DevicesUpdated(Vec<DiscoveredDevice>),
+    DevicesRefreshed(Vec<DiscoveredDevice>),
+    RefreshDevices,
     DeviceSelected(DiscoveredDevice),
     DeviceDeselected,
     

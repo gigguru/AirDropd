@@ -8,6 +8,7 @@ use tracing::{info, error, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use socket2::{Socket, Domain, Type, Protocol};
 use super::interface::NetworkManager;
+use super::util::friendly_name;
 
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
@@ -159,8 +160,9 @@ impl DeviceDiscovery {
 										if !addresses.is_empty() {
 											if let Some(addr) = addresses.iter().next() {
 												let mut devices = devices.lock().await;
+												let display_name = friendly_name(info.get_fullname());
 												let device = DiscoveredDevice {
-													name: info.get_fullname().to_string(),
+													name: display_name,
 													address: IpAddr::V4(*addr),
 													port: info.get_port(),
 													service_type: match service_type.as_str() {

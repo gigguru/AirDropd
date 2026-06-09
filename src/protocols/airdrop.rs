@@ -17,6 +17,7 @@ use std::net::{SocketAddr, IpAddr, Ipv4Addr};
 use socket2::{Socket, Domain, Type, Protocol};
 use super::apple_records::AppleRecords;
 use super::http_server::AirDropHttpServer;
+use crate::network::util::primary_ipv4;
 use mime_guess;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -188,14 +189,16 @@ impl AirDrop {
         let device_info_properties = AppleRecords::create_device_info_txt_records()?;
         
         let hostname = hostname::get()?.to_string_lossy().to_string();
+        let host_fqdn = format!("{}.local.", hostname);
+        let ip = primary_ipv4()?.to_string();
         
         // Register AirDrop TCP service on standard port
         let airdrop_tcp_service = ServiceInfo::new(
             "_airdrop._tcp.local.",
             &hostname,
-            "local.",
-            "",
-            8771, // Standard AirDrop port
+            &host_fqdn,
+            &ip,
+            8770, // Standard AirDrop HTTPS port
             Some(airdrop_properties.clone())
         )?;
 
@@ -203,9 +206,9 @@ impl AirDrop {
         let airdrop_udp_service = ServiceInfo::new(
             "_airdrop._udp.local.",
             &hostname,
-            "local.",
-            "",
-            8771, // Standard AirDrop port
+            &host_fqdn,
+            &ip,
+            8770, // Standard AirDrop HTTPS port
             Some(airdrop_properties)
         )?;
 
@@ -213,8 +216,8 @@ impl AirDrop {
         let companion_service = ServiceInfo::new(
             "_companion-link._tcp.local.",
             &hostname,
-            "local.",
-            "",
+            &host_fqdn,
+            &ip,
             7001,
             Some(companion_properties)
         )?;
@@ -223,8 +226,8 @@ impl AirDrop {
         let device_info_service = ServiceInfo::new(
             "_device-info._tcp.local.",
             &hostname,
-            "local.",
-            "",
+            &host_fqdn,
+            &ip,
             7002,
             Some(device_info_properties)
         )?;
@@ -239,7 +242,7 @@ impl AirDrop {
         mdns.register(device_info_service)
             .map_err(|e| anyhow!("Failed to register Device Info service: {}", e))?;
 
-        info!("Successfully registered Apple-compatible mDNS services");
+        info!("Successfully registered Apple-compatible mDNS services on {} ({})", host_fqdn, ip);
         *self.mdns.lock().await = Some(mdns);
 
         // Setup UDP multicast with explicit binding to all interfaces
@@ -331,12 +334,12 @@ impl AirDrop {
         self.register_mdns_services().await?;
 
         // Initialize and start HTTPS server for AirDrop protocol
-        let mut http_server = AirDropHttpServer::new(8771); // Use standard AirDrop port
+        let mut http_server = AirDropHttpServer::new(8770); // Use standard AirDrop port
         http_server.initialize().await?;
         http_server.start().await?;
         
         *self.http_server.lock().await = Some(http_server);
-        info!("Started AirDrop HTTPS server on port 8771");
+        info!("Started AirDrop HTTPS server on port 8770");
 
         // Keep the old TCP listener for backward compatibility
         let v4_listener = match TcpListener::bind(("0.0.0.0", 7000)).await {

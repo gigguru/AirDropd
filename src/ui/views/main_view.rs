@@ -101,10 +101,7 @@ impl<'a> MainView<'a> {
 
         let body = column![
             self.toolbar(theme),
-            Space::with_height(8),
-            self.radar_area(&iced_theme, theme),
-            Space::with_height(Length::Fill),
-            self.device_row(&iced_theme),
+            self.discovery_center(&iced_theme, theme),
             if self.selected_device.is_some() {
                 self.action_sheet(theme)
             } else {
@@ -125,38 +122,61 @@ impl<'a> MainView<'a> {
         let content = container(body)
             .width(Length::Fill)
             .height(Length::Fill)
-            .padding([12, 20])
+            .padding([12, 20, 8, 20])
             .style(move |_: &IcedTheme| iced::widget::container::Appearance {
                 background: Some(iced::Background::Color(bg)),
                 ..Default::default()
             });
 
-        let with_notifications = if !self.notifications.is_empty() {
-            column![
-                content,
-                self.notifications_overlay(theme),
-            ]
-        } else {
-            column![content]
-        };
-
         if self.show_link_dialog {
             container(
-                column![
-                    with_notifications,
-                    self.link_dialog(theme),
-                ]
+                column![content, self.link_dialog(theme)]
             )
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
         } else {
-            with_notifications.into()
+            content.into()
         }
     }
 
+    /// Center discovery zone: radar rings with device bubbles directly beneath (macOS AirDrop layout).
+    fn discovery_center(
+        &self,
+        iced_theme: &IcedTheme,
+        theme: &Theme,
+    ) -> Element<'a, Message> {
+        let status_text = if self.is_scanning {
+            "Looking for others..."
+        } else if self.discovered_devices.is_empty() {
+            "No devices found"
+        } else {
+            "Tap a device to share with"
+        };
+
+        container(
+            column![
+                widgets::airdrop_radar(iced_theme),
+                Space::with_height(12),
+                self.device_row(iced_theme),
+                Space::with_height(8),
+                text(status_text)
+                    .size(13)
+                    .style(styles::text_color_muted(*theme))
+                    .horizontal_alignment(iced::alignment::Horizontal::Center),
+            ]
+            .align_items(Alignment::Center)
+            .width(Length::Fill)
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x()
+        .center_y()
+        .into()
+    }
+
     fn toolbar(&self, theme: &Theme) -> Element<'a, Message> {
-        row![
+        let mut bar = row![
             Space::with_width(Length::Fixed(32.0)),
             text("AirDrop")
                 .size(13)
@@ -175,10 +195,22 @@ impl<'a> MainView<'a> {
             .style(iced::theme::Button::Text)
             .padding([4, 8]),
         ]
-        .align_items(Alignment::Center)
-        .into()
+        .align_items(Alignment::Center);
+
+        if !self.notifications.is_empty() {
+            if let Some(n) = self.notifications.last() {
+                bar = bar.push(
+                    text(&n.title)
+                        .size(11)
+                        .style(styles::text_color_muted(*theme)),
+                );
+            }
+        }
+
+        bar.into()
     }
 
+    #[allow(dead_code)]
     fn radar_area(
         &self,
         iced_theme: &IcedTheme,
@@ -209,7 +241,15 @@ impl<'a> MainView<'a> {
 
     fn device_row(&self, iced_theme: &IcedTheme) -> Element<'a, Message> {
         if self.discovered_devices.is_empty() {
-            return Space::with_height(Length::Fixed(90.0)).into();
+            return container(
+                text(if self.is_scanning { "Searching..." } else { " " })
+                    .size(12)
+                    .style(styles::colors::TEXT_MUTED),
+            )
+            .height(Length::Fixed(100.0))
+            .center_x()
+            .center_y()
+            .into();
         }
 
         let bubbles: Element<'a, Message> = self
@@ -217,12 +257,12 @@ impl<'a> MainView<'a> {
             .iter()
             .cloned()
             .fold(
-                row![].spacing(16).align_items(Alignment::Center),
+                row![].spacing(20).align_items(Alignment::Center),
                 |row_el, device| {
                     let is_selected = self
                         .selected_device
                         .as_ref()
-                        .map(|s| s.name == device.name)
+                        .map(|s| s.name == device.name && s.address == device.address)
                         .unwrap_or(false);
                     let icon = widgets::device_icon(&device.service_type);
                     let device_for_msg = device.clone();
@@ -241,12 +281,13 @@ impl<'a> MainView<'a> {
             container(bubbles)
                 .center_x()
                 .width(Length::Fill)
-                .padding([8, 0]),
+                .padding([4, 8]),
         )
         .direction(iced::widget::scrollable::Direction::Horizontal(
-            iced::widget::scrollable::Properties::default(),
+            iced::widget::scrollable::Properties::default().scroller_width(6.0),
         ))
         .height(Length::Fixed(100.0))
+        .width(Length::Fill)
         .into()
     }
 

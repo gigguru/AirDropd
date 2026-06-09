@@ -61,10 +61,11 @@ impl AirDropdServices {
             airplay.start_server().await?;
         }
 
-        // Inizializza BLE
+        // Inizializza BLE (scan + advertise so iPhones can discover this PC)
         {
             let mut ble = self.ble.lock().await;
             ble.initialize().await?;
+            ble.start_advertising().await?;
         }
 
         // Inizializza e avvia AWDL
@@ -73,7 +74,23 @@ impl AirDropdServices {
             awdl.initialize().await?;
         }
         
+        // Keep AWDL peer table fresh
+        {
+            let awdl = self.awdl.lock().await;
+            awdl.refresh_peers().await;
+        }
+        
         Ok(())
+    }
+}
+
+/// Background task: periodically refresh AWDL peers while services run.
+pub async fn awdl_peer_refresh_loop(services: std::sync::Arc<AirDropdServices>) {
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+    loop {
+        interval.tick().await;
+        let awdl = services.awdl.lock().await;
+        awdl.refresh_peers().await;
     }
 }
 
@@ -100,8 +117,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     runtime.spawn(async move {
         if let Err(e) = services_clone.initialize().await {
             eprintln!("Error initializing services: {}", e);
-            // Non terminiamo l'app, continuiamo con funzionalità limitate
         }
+    });
+
+    let awdl_refresh = services.clone();
+    runtime.spawn(async move {
+        awdl_peer_refresh_loop(awdl_refresh).await;
     });
     
     // Mantieni il runtime attivo in un thread separato
@@ -116,7 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Avvia l'interfaccia utente Iced nel thread principale
     // Iced gestisce il proprio event loop, quindi non serve async qui
-    ui::run()?;
+    ui::run(services)?;
     
     Ok(())
 }

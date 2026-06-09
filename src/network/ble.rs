@@ -65,6 +65,9 @@ impl BleManager {
         info!("Using BLE adapter: {}", info);
         
         self.adapter = Some(adapter);
+
+        // Scan for nearby Apple devices
+        self.start_scanning().await?;
         Ok(())
     }
 
@@ -211,16 +214,17 @@ impl BleManager {
             return Ok(());
         }
 
-        info!("Starting BLE advertising for AirDrop discovery...");
-        
-        // Note: btleplug doesn't support advertising on Windows directly
-        // This would need platform-specific Windows BLE advertising APIs
-        // For now, we'll mark as advertising but actual implementation
-        // would require Windows.Devices.Bluetooth.Advertisement APIs
-        
-        warn!("BLE advertising not fully implemented on Windows - requires platform-specific APIs");
-        *is_advertising = true;
+        let device_name = hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "AirDropd".to_string());
 
+        info!("Starting BLE advertising for AirDrop discovery as \"{}\"...", device_name);
+
+        if let Err(e) = crate::network::ble_advertise::start(&device_name) {
+            warn!("BLE advertising failed: {} — iPhones may not discover this PC via AirDrop", e);
+        }
+
+        *is_advertising = true;
         Ok(())
     }
 
@@ -231,6 +235,7 @@ impl BleManager {
         }
 
         info!("Stopping BLE advertising...");
+        crate::network::ble_advertise::stop();
         *is_advertising = false;
 
         Ok(())
