@@ -33,7 +33,7 @@ mod imp {
     fn load_tray_icon(instance: HMODULE) -> HICON {
         unsafe {
             if let Ok(handle) = LoadImageW(
-                Some(instance),
+                instance,
                 windows::core::PCWSTR(1usize as *const u16),
                 IMAGE_ICON,
                 0,
@@ -131,7 +131,7 @@ mod imp {
                     None,
                 );
 
-                if hwnd.0 == std::ptr::null_mut() {
+                if hwnd.0 == 0 {
                     warn!("Failed to create tray message window");
                     return;
                 }
