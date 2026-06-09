@@ -40,16 +40,30 @@ All operations work **locally** over your network, without cloud or third-party 
 ---
 
 ## 🧱 Building
-### 1. Clone the repository:
-```bash
-git clone https://github.com/seregonwar/AirDropd.git
+
+### Download (recommended)
+
+Pre-built portable **`AirDropd.exe`** is produced by GitHub Actions on every push to `main`:
+
+1. Open [Actions → Build Windows](https://github.com/gigguru/AirDropd/actions/workflows/build-windows.yml)
+2. Download the **AirDropd-windows-x86_64** artifact — it contains a single `AirDropd.exe` with no extra DLLs to ship.
+
+Tag a release (`v0.1.0`, etc.) to attach the exe to a GitHub Release automatically.
+
+### Build from source (Windows)
+
+```bat
+build.bat
 ```
 
-### 2. Build the project:
+Output: `target\release\AirDropd.exe` (portable, statically linked MSVC runtime).
+
+### Build from source (Rust)
+
 ```bash
+git clone https://github.com/gigguru/AirDropd.git
 cd AirDropd
-cargo build
-cargo run
+cargo build --release --bin AirDropd
 ```
 
 ---
