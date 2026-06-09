@@ -21,6 +21,7 @@ pub struct AirDropHttpServer {
     port: u16,
     config: SharedConfig,
     received_tx: Option<tokio::sync::broadcast::Sender<PathBuf>>,
+    incoming_transfer: Option<Arc<crate::protocols::incoming_transfer::IncomingTransferService>>,
     tls_acceptor: Option<TlsAcceptor>,
     running: Arc<Mutex<bool>>,
 }
@@ -38,9 +39,18 @@ impl AirDropHttpServer {
             port,
             config,
             received_tx: None,
+            incoming_transfer: None,
             tls_acceptor: None,
             running: Arc::new(Mutex::new(false)),
         }
+    }
+
+    pub fn with_incoming_transfer(
+        mut self,
+        gate: Arc<crate::protocols::incoming_transfer::IncomingTransferService>,
+    ) -> Self {
+        self.incoming_transfer = Some(gate);
+        self
     }
 
     pub fn with_received_notifier(
@@ -76,6 +86,7 @@ impl AirDropHttpServer {
         let acceptor = acceptor.clone();
         let config = self.config.clone();
         let received_tx = self.received_tx.clone();
+        let incoming_transfer = self.incoming_transfer.clone();
 
         tokio::spawn(async move {
             while *running.lock().await {
@@ -84,10 +95,17 @@ impl AirDropHttpServer {
                         let acceptor = acceptor.clone();
                         let config = config.clone();
                         let received_tx = received_tx.clone();
+                        let incoming_transfer = incoming_transfer.clone();
                         tokio::spawn(async move {
-                            if let Err(e) =
-                                Self::handle_connection(stream, addr, acceptor, config, received_tx)
-                                    .await
+                            if let Err(e) = Self::handle_connection(
+                                stream,
+                                addr,
+                                acceptor,
+                                config,
+                                received_tx,
+                                incoming_transfer,
+                            )
+                            .await
                             {
                                 error!("Error handling connection from {}: {}", addr, e);
                             }
@@ -110,6 +128,7 @@ impl AirDropHttpServer {
         acceptor: TlsAcceptor,
         config: SharedConfig,
         received_tx: Option<tokio::sync::broadcast::Sender<PathBuf>>,
+        incoming_transfer: Option<Arc<crate::protocols::incoming_transfer::IncomingTransferService>>,
     ) -> Result<()> {
         debug!("Handling HTTPS connection from {}", addr);
         let mut tls_stream = acceptor.accept(stream).await?;
@@ -135,7 +154,8 @@ impl AirDropHttpServer {
                     false
                 }
                 ("POST", "/Ask") => {
-                    handle_ask(&mut tls_stream, &request, &config).await?;
+                    handle_ask(&mut tls_stream, &request, &config, incoming_transfer.clone())
+                        .await?;
                     false
                 }
                 ("POST", "/Upload") => {
@@ -196,11 +216,30 @@ async fn handle_ask(
     stream: &mut RustlsTlsStream<TcpStream>,
     request: &HttpRequest,
     config: &SharedConfig,
+    incoming_transfer: Option<Arc<crate::protocols::incoming_transfer::IncomingTransferService>>,
 ) -> Result<()> {
-    if let Ok(plist) = apple_plist::parse_plist(&request.body) {
-        let sender = apple_plist::plist_string(&plist, "SenderComputerName")
-            .unwrap_or_else(|| "Unknown".to_string());
-        info!("AirDrop /Ask from {} — accepting transfer", sender);
+    let details = crate::protocols::incoming_transfer::parse_ask_request(&request.body)
+        .unwrap_or_else(|_| crate::protocols::incoming_transfer::IncomingTransferDetails {
+            sender_name: "Unknown device".to_string(),
+            sender_model: "Apple device".to_string(),
+            files: Vec::new(),
+        });
+
+    info!(
+        "AirDrop /Ask from {} — {} file(s), awaiting decision",
+        details.sender_name,
+        details.files.len()
+    );
+
+    let accepted = if let Some(gate) = incoming_transfer {
+        gate.wait_for_decision(details).await
+    } else {
+        true
+    };
+
+    if !accepted {
+        write_response(stream, 503, &[], true).await?;
+        return Ok(());
     }
 
     let broadcast_name = config

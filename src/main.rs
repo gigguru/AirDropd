@@ -17,6 +17,7 @@ use network::discovery::DeviceDiscovery;
 use network::mdns_hub::{self, SharedMdns};
 use protocols::airdrop::AirDrop;
 use protocols::airplay::AirPlay;
+use protocols::incoming_transfer::IncomingTransferService;
 use protocols::awdl::{AwdlManager, AwdlManagerConfig};
 use std::path::PathBuf;
 
@@ -30,15 +31,26 @@ pub struct AirDropdServices {
     pub ble: Arc<Mutex<BleManager>>,
     pub awdl: Arc<Mutex<AwdlManager>>,
     pub received_tx: tokio::sync::broadcast::Sender<PathBuf>,
+    pub incoming_transfer: Arc<IncomingTransferService>,
 }
 
 impl AirDropdServices {
     pub async fn new(app_config: config::SharedConfig) -> anyhow::Result<Self> {
         let (received_tx, _) = tokio::sync::broadcast::channel(16);
         let mdns = mdns_hub::create_shared_mdns()?;
+        let auto_accept = app_config
+            .read()
+            .map(|c| c.auto_accept_incoming)
+            .unwrap_or(false);
+        let incoming_transfer = Arc::new(IncomingTransferService::new(auto_accept));
 
         let discovery = DeviceDiscovery::new(mdns.clone())?;
-        let airdrop = AirDrop::new(app_config.clone(), received_tx.clone(), mdns.clone());
+        let airdrop = AirDrop::new(
+            app_config.clone(),
+            received_tx.clone(),
+            mdns.clone(),
+            incoming_transfer.clone(),
+        );
         let airplay = AirPlay::new();
         let ble = BleManager::new().await?;
         let awdl = AwdlManager::new(AwdlManagerConfig::default());
@@ -52,6 +64,7 @@ impl AirDropdServices {
             ble: Arc::new(Mutex::new(ble)),
             awdl: Arc::new(Mutex::new(awdl)),
             received_tx,
+            incoming_transfer,
         })
     }
 
@@ -106,11 +119,20 @@ impl AirDropdServices {
 
     /// Apply saved settings to live discovery services (mDNS + BLE).
     pub async fn apply_settings(&self) -> anyhow::Result<()> {
-        let (broadcast_name, device_hash, discoverable) = self
+        let (broadcast_name, device_hash, discoverable, auto_accept) = self
             .config
             .read()
-            .map(|c| (c.broadcast_name.clone(), c.device_ph_bytes(), c.discoverable))
-            .unwrap_or_else(|_| (config::default_broadcast_name(), [0; 6], true));
+            .map(|c| {
+                (
+                    c.broadcast_name.clone(),
+                    c.device_ph_bytes(),
+                    c.discoverable,
+                    c.auto_accept_incoming,
+                )
+            })
+            .unwrap_or_else(|_| (config::default_broadcast_name(), [0; 6], true, false));
+
+        self.incoming_transfer.set_auto_accept(auto_accept);
 
         {
             let airdrop = self.airdrop.lock().await;

@@ -308,9 +308,15 @@ pub fn section_header<'a>(
         .into()
 }
 
-/// macOS AirDrop-style radar (concentric blue rings)
-pub fn airdrop_radar<'a>(theme: &IcedTheme) -> Element<'a, Message> {
+/// macOS AirDrop-style animated sonar (concentric pulsing rings)
+pub fn airdrop_radar<'a>(theme: &IcedTheme, is_scanning: bool, tick: u32) -> Element<'a, Message> {
     let is_dark = theme == &IcedTheme::Dark;
+    let pulse = if is_scanning {
+        let phase = (tick % 40) as f32 / 40.0;
+        0.5 + 0.5 * (phase * std::f32::consts::TAU).sin().abs()
+    } else {
+        0.35
+    };
 
     let ring_style = |size: f32, fill: Color, border_alpha: f32| {
         move |_: &IcedTheme| container::Appearance {
@@ -318,42 +324,52 @@ pub fn airdrop_radar<'a>(theme: &IcedTheme) -> Element<'a, Message> {
             border: Border {
                 radius: (size / 2.0).into(),
                 width: 1.0,
-                color: Color::from_rgba(0.0, 0.48, 1.0, border_alpha),
+                color: Color::from_rgba(0.0, 0.48, 1.0, border_alpha * pulse.max(0.2)),
             },
             ..Default::default()
         }
     };
 
     let outer_fill = if is_dark {
-        Color::from_rgba(0.0, 0.48, 1.0, 0.08)
+        Color::from_rgba(0.0, 0.48, 1.0, 0.06 + 0.06 * pulse)
     } else {
-        Color::from_rgba(0.0, 0.48, 1.0, 0.06)
+        Color::from_rgba(0.0, 0.48, 1.0, 0.04 + 0.05 * pulse)
     };
     let mid_fill = if is_dark {
-        Color::from_rgba(0.0, 0.48, 1.0, 0.15)
+        Color::from_rgba(0.0, 0.48, 1.0, 0.12 + 0.10 * pulse)
     } else {
-        Color::from_rgba(0.0, 0.48, 1.0, 0.12)
+        Color::from_rgba(0.0, 0.48, 1.0, 0.10 + 0.08 * pulse)
     };
     let inner_fill = if is_dark {
-        Color::from_rgba(0.0, 0.48, 1.0, 0.28)
+        Color::from_rgba(0.0, 0.48, 1.0, 0.22 + 0.12 * pulse)
     } else {
-        Color::from_rgba(0.0, 0.48, 1.0, 0.22)
+        Color::from_rgba(0.0, 0.48, 1.0, 0.18 + 0.10 * pulse)
     };
     let center_fill = if is_dark {
-        Color::from_rgba(0.0, 0.48, 1.0, 0.50)
+        Color::from_rgba(0.0, 0.48, 1.0, 0.40 + 0.15 * pulse)
     } else {
-        Color::from_rgba(0.0, 0.48, 1.0, 0.40)
+        Color::from_rgba(0.0, 0.48, 1.0, 0.32 + 0.12 * pulse)
+    };
+
+    let center_label = if is_scanning {
+        "…"
+    } else {
+        "◎"
     };
 
     container(
         container(
             container(
-                container(Space::with_width(Length::Fixed(1.0)))
-                    .width(Length::Fixed(56.0))
-                    .height(Length::Fixed(56.0))
-                    .center_x()
-                    .center_y()
-                    .style(ring_style(56.0, center_fill, 0.5))
+                container(
+                    text(center_label)
+                        .size(18)
+                        .style(Color::from_rgba(1.0, 1.0, 1.0, 0.85))
+                )
+                .width(Length::Fixed(56.0))
+                .height(Length::Fixed(56.0))
+                .center_x()
+                .center_y()
+                .style(ring_style(56.0, center_fill, 0.5))
             )
             .width(Length::Fixed(120.0))
             .height(Length::Fixed(120.0))

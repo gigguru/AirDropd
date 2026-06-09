@@ -60,7 +60,7 @@ pub struct SettingsView {
     // Impostazioni AirDrop
     airdrop_enabled: bool,
     airdrop_visibility: AirDropVisibility,
-    auto_accept_from_contacts: bool,
+    auto_accept_incoming: bool,
     
     // Impostazioni AirPlay
     airplay_enabled: bool,
@@ -148,7 +148,7 @@ impl SettingsView {
             cfg.minimize_to_tray,
             true,
             AirDropVisibility::Everyone,
-            false,
+            cfg.auto_accept_incoming,
             true,
             AirPlayQuality::Auto,
             false,
@@ -171,6 +171,7 @@ impl SettingsView {
             cfg.download_dir = crate::config::default_download_dir();
         }
         cfg.minimize_to_tray = self.minimize_to_tray;
+        cfg.auto_accept_incoming = self.auto_accept_incoming;
     }
 
     pub fn set_broadcast_name(&mut self, name: String) {
@@ -185,6 +186,10 @@ impl SettingsView {
         self.minimize_to_tray = value;
     }
 
+    pub fn set_auto_accept_incoming(&mut self, value: bool) {
+        self.auto_accept_incoming = value;
+    }
+
     /// Crea una nuova istanza della vista impostazioni
     pub fn new(
         broadcast_name: String,
@@ -195,7 +200,7 @@ impl SettingsView {
         minimize_to_tray: bool,
         airdrop_enabled: bool,
         airdrop_visibility: AirDropVisibility,
-        auto_accept_from_contacts: bool,
+        auto_accept_incoming: bool,
         airplay_enabled: bool,
         airplay_quality: AirPlayQuality,
         airplay_audio_only: bool,
@@ -215,7 +220,7 @@ impl SettingsView {
             minimize_to_tray,
             airdrop_enabled,
             airdrop_visibility,
-            auto_accept_from_contacts,
+            auto_accept_incoming,
             airplay_enabled,
             airplay_quality,
             airplay_audio_only,
@@ -481,10 +486,10 @@ impl SettingsView {
                     .spacing(styles::spacing::MEDIUM),
                     
                     checkbox(
-                        "Automatically accept from contacts",
-                        self.auto_accept_from_contacts
+                        "Automatically accept incoming transfers",
+                        self.auto_accept_incoming
                     )
-                    .on_toggle(|_| Message::Tick),
+                    .on_toggle(Message::AutoAcceptIncomingChanged),
                 ]
                 .spacing(styles::spacing::MEDIUM)
             } else {

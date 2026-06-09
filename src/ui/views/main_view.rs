@@ -28,12 +28,14 @@ pub struct MainView<'a> {
     discovered_devices: &'a [crate::network::DiscoveredDevice],
     selected_device: Option<&'a crate::network::DiscoveredDevice>,
     is_scanning: bool,
+    sonar_tick: u32,
     airplay_status: &'a crate::protocols::airplay::AirPlayStatus,
     airdrop_status: &'a crate::protocols::airdrop::AirDropStatus,
     file_transfer_progress: Option<f32>,
     notifications: &'a [NotificationMessage],
     show_link_dialog: bool,
     link_url: &'a str,
+    pending_incoming: Option<&'a crate::protocols::incoming_transfer::IncomingTransferDetails>,
     visibility: AirDropVisibility,
 }
 
@@ -41,12 +43,14 @@ pub fn render<'a>(
     discovered_devices: &'a [crate::network::DiscoveredDevice],
     selected_device: Option<&'a crate::network::DiscoveredDevice>,
     is_scanning: bool,
+    sonar_tick: u32,
     airplay_status: &'a crate::protocols::airplay::AirPlayStatus,
     airdrop_status: &'a crate::protocols::airdrop::AirDropStatus,
     file_transfer_progress: Option<f32>,
     notifications: &'a [NotificationMessage],
     show_link_dialog: bool,
     link_url: &'a str,
+    pending_incoming: Option<&'a crate::protocols::incoming_transfer::IncomingTransferDetails>,
     visibility: AirDropVisibility,
     theme: &Theme,
 ) -> Element<'a, Message> {
@@ -54,15 +58,113 @@ pub fn render<'a>(
         discovered_devices,
         selected_device,
         is_scanning,
+        sonar_tick,
         airplay_status,
         airdrop_status,
         file_transfer_progress,
         notifications,
         show_link_dialog,
         link_url,
+        pending_incoming,
         visibility,
     )
     .view(theme)
+}
+
+/// Modal overlay for incoming AirDrop /Ask accept or reject.
+pub fn incoming_transfer_overlay<'a>(
+    incoming: &crate::protocols::incoming_transfer::IncomingTransferDetails,
+    _underlay: Element<'a, Message>,
+) -> Element<'a, Message> {
+    use crate::protocols::incoming_transfer::format_bytes;
+
+    let file_lines: Element<'a, Message> = if incoming.files.is_empty() {
+        text("Incoming file transfer")
+            .size(13)
+            .style(styles::colors::TEXT_SECONDARY)
+            .into()
+    } else {
+        incoming
+            .files
+            .iter()
+            .take(4)
+            .fold(column![].spacing(4), |col, file| {
+                col.push(
+                    text(format!(
+                        "• {} ({})",
+                        file.name,
+                        format_bytes(file.size)
+                    ))
+                    .size(12)
+                    .style(styles::colors::TEXT_MUTED),
+                )
+            })
+            .into()
+    };
+
+    let dialog = container(
+        column![
+            text("Accept AirDrop?")
+                .size(18)
+                .style(styles::colors::PRIMARY),
+            Space::with_height(8),
+            text(incoming.summary())
+                .size(14)
+                .style(styles::colors::TEXT_PRIMARY),
+            text(format!("From: {}", incoming.sender_model))
+                .size(12)
+                .style(styles::colors::TEXT_MUTED),
+            Space::with_height(8),
+            file_lines,
+            Space::with_height(16),
+            row![
+                button(text("Decline").size(14))
+                    .on_press(Message::RejectIncomingTransfer)
+                    .style(iced::theme::Button::Secondary)
+                    .padding([8, 20]),
+                Space::with_width(12),
+                button(text("Accept").size(14))
+                    .on_press(Message::AcceptIncomingTransfer)
+                    .style(iced::theme::Button::Primary)
+                    .padding([8, 20]),
+            ]
+            .align_items(Alignment::Center),
+        ]
+        .align_items(Alignment::Center)
+        .padding(24)
+    )
+    .style(|_: &IcedTheme| container::Appearance {
+        background: Some(iced::Background::Color(styles::colors::SURFACE)),
+        border: iced::Border {
+            color: styles::colors::PRIMARY,
+            width: 1.5,
+            radius: 12.0.into(),
+        },
+        shadow: iced::Shadow {
+            color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.45),
+            offset: iced::Vector::new(0.0, 8.0),
+            blur_radius: 24.0,
+        },
+        ..Default::default()
+    })
+    .width(Length::Fixed(360.0));
+
+    container(
+        container(dialog)
+            .center_x()
+            .center_y()
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(|_: &IcedTheme| container::Appearance {
+        background: Some(iced::Background::Color(iced::Color::from_rgba(
+            0.0, 0.0, 0.0, 0.55,
+        ))),
+        ..Default::default()
+    })
+    .into()
 }
 
 impl<'a> MainView<'a> {
@@ -70,24 +172,28 @@ impl<'a> MainView<'a> {
         discovered_devices: &'a [crate::network::DiscoveredDevice],
         selected_device: Option<&'a crate::network::DiscoveredDevice>,
         is_scanning: bool,
+        sonar_tick: u32,
         airplay_status: &'a crate::protocols::airplay::AirPlayStatus,
         airdrop_status: &'a crate::protocols::airdrop::AirDropStatus,
         file_transfer_progress: Option<f32>,
         notifications: &'a [NotificationMessage],
-        show_link_dialog: bool,
-        link_url: &'a str,
-        visibility: AirDropVisibility,
-    ) -> Self {
+    show_link_dialog: bool,
+    link_url: &'a str,
+    pending_incoming: Option<&'a crate::protocols::incoming_transfer::IncomingTransferDetails>,
+    visibility: AirDropVisibility,
+) -> Self {
         Self {
             discovered_devices,
             selected_device,
             is_scanning,
+            sonar_tick,
             airplay_status,
             airdrop_status,
             file_transfer_progress,
             notifications,
             show_link_dialog,
             link_url,
+            pending_incoming,
             visibility,
         }
     }
@@ -129,12 +235,12 @@ impl<'a> MainView<'a> {
             });
 
         if self.show_link_dialog {
-            container(
-                column![content, self.link_dialog(theme)]
-            )
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+            container(column![content, self.link_dialog(theme)])
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else if let Some(incoming) = self.pending_incoming {
+            incoming_transfer_overlay(incoming, content.into())
         } else {
             content.into()
         }
@@ -147,18 +253,22 @@ impl<'a> MainView<'a> {
         theme: &Theme,
     ) -> Element<'a, Message> {
         let status_text = if self.is_scanning {
-            "Looking for others..."
+            "Looking for others...".to_string()
         } else if self.discovered_devices.is_empty() {
-            "No devices found"
+            "No devices found — open AirDrop on your iPhone or Mac".to_string()
         } else {
-            "Tap a device to share with"
+            format!(
+                "{} device{} nearby — tap to share",
+                self.discovered_devices.len(),
+                if self.discovered_devices.len() == 1 { "" } else { "s" }
+            )
         };
 
         container(
             column![
-                widgets::airdrop_radar(iced_theme),
+                widgets::airdrop_radar(iced_theme, self.is_scanning, self.sonar_tick),
                 Space::with_height(12),
-                self.device_row(iced_theme),
+                self.device_orbit(iced_theme),
                 Space::with_height(8),
                 text(status_text)
                     .size(13)
@@ -233,7 +343,7 @@ impl<'a> MainView<'a> {
         };
 
         column![
-            container(widgets::airdrop_radar(iced_theme))
+            container(widgets::airdrop_radar(iced_theme, self.is_scanning, self.sonar_tick))
                 .center_x()
                 .height(Length::Fixed(240.0)),
             Space::with_height(8),
@@ -245,6 +355,11 @@ impl<'a> MainView<'a> {
         .align_items(Alignment::Center)
         .width(Length::Fill)
         .into()
+    }
+
+    /// Devices arranged in a row beneath the sonar (AirDrop-capable first).
+    fn device_orbit(&self, iced_theme: &IcedTheme) -> Element<'a, Message> {
+        self.device_row(iced_theme)
     }
 
     fn device_row(&self, iced_theme: &IcedTheme) -> Element<'a, Message> {
@@ -273,9 +388,15 @@ impl<'a> MainView<'a> {
                         .map(|s| s.name == device.name && s.address == device.address)
                         .unwrap_or(false);
                     let icon = widgets::device_icon(&device.service_type);
+                    let ble_only = device.port == 0 || device.address.is_unspecified();
+                    let label = if ble_only {
+                        format!("{} 📡", device.name)
+                    } else {
+                        device.name.clone()
+                    };
                     let device_for_msg = device.clone();
                     row_el.push(widgets::device_bubble(
-                        &device.name,
+                        &label,
                         icon,
                         is_selected,
                         iced_theme,

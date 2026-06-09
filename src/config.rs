@@ -37,6 +37,9 @@ pub struct AppConfig {
     /// User dismissed the firewall prompt without adding rules.
     #[serde(default)]
     pub firewall_prompt_dismissed: bool,
+    /// Automatically accept incoming AirDrop transfers without prompting.
+    #[serde(default)]
+    pub auto_accept_incoming: bool,
 }
 
 fn default_discoverable() -> bool {
@@ -56,6 +59,7 @@ impl Default for AppConfig {
             contacts_only: false,
             firewall_exceptions_added: false,
             firewall_prompt_dismissed: false,
+            auto_accept_incoming: false,
         }
     }
 }

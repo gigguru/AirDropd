@@ -56,6 +56,7 @@ pub struct AirDrop {
     pub status: Arc<Mutex<AirDropStatus>>,
     config: SharedConfig,
     received_tx: Option<tokio::sync::broadcast::Sender<PathBuf>>,
+    incoming_transfer: Option<Arc<crate::protocols::incoming_transfer::IncomingTransferService>>,
 }
 
 
@@ -64,6 +65,7 @@ impl AirDrop {
         config: SharedConfig,
         received_tx: tokio::sync::broadcast::Sender<PathBuf>,
         mdns: SharedMdns,
+        incoming_transfer: Arc<crate::protocols::incoming_transfer::IncomingTransferService>,
     ) -> Self {
         Self {
             current_file: Arc::new(Mutex::new(None)),
@@ -75,6 +77,7 @@ impl AirDrop {
             status: Arc::new(Mutex::new(AirDropStatus::Idle)),
             config,
             received_tx: Some(received_tx),
+            incoming_transfer: Some(incoming_transfer),
         }
     }
 
@@ -342,6 +345,9 @@ impl AirDrop {
         let mut http_server = AirDropHttpServer::new(8770, self.config.clone());
         if let Some(tx) = &self.received_tx {
             http_server = http_server.with_received_notifier(tx.clone());
+        }
+        if let Some(gate) = &self.incoming_transfer {
+            http_server = http_server.with_incoming_transfer(gate.clone());
         }
         http_server.initialize().await?;
         http_server.start().await?;

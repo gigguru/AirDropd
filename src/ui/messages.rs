@@ -18,6 +18,7 @@ pub enum Message {
     InitializationComplete,
     SplashTick,
     SplashComplete,
+    SonarTick,
     CheckFirewall,
     FirewallPromptComplete(crate::network::firewall::FirewallPromptResult),
     
@@ -82,6 +83,7 @@ pub enum Message {
     BrowseDownloadDir,
     DownloadDirSelected(Option<PathBuf>),
     MinimizeToTrayChanged(bool),
+    AutoAcceptIncomingChanged(bool),
     SaveSettings,
     ResetSettings,
 
@@ -94,6 +96,12 @@ pub enum Message {
     QuitApp,
     PollTray,
     PollReceived,
+
+    // Incoming AirDrop transfer prompt (/Ask)
+    PollIncomingTransfer,
+    UpdatePendingIncoming(Option<crate::protocols::incoming_transfer::IncomingTransferDetails>),
+    AcceptIncomingTransfer,
+    RejectIncomingTransfer,
 
     // Discovery visibility (macOS AirDrop-style)
     VisibilityChanged(crate::ui::views::settings_view::AirDropVisibility),

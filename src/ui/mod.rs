@@ -97,6 +97,12 @@ pub struct AirDropdApp {
     /// Splash animation state
     splash_frames: assets::SplashFrames,
     splash_tick: usize,
+
+    /// Animated sonar pulse while scanning
+    sonar_tick: u32,
+
+    /// Pending incoming AirDrop /Ask request (shown in accept dialog)
+    pending_incoming: Option<crate::protocols::incoming_transfer::IncomingTransferDetails>,
 }
 
 /// Viste disponibili nell'applicazione
@@ -164,6 +170,8 @@ impl Application for AirDropdApp {
             received_rx: Some(received_rx),
             splash_frames: assets::SplashFrames::new(),
             splash_tick: 0,
+            sonar_tick: 0,
+            pending_incoming: None,
         };
 
         (app, Command::none())
@@ -196,6 +204,13 @@ impl Application for AirDropdApp {
                 self.is_loading = false;
                 self.status_message = "Ready".to_string();
                 Command::perform(async {}, |_| Message::CheckFirewall)
+            }
+
+            Message::SonarTick => {
+                if self.is_scanning {
+                    self.sonar_tick = self.sonar_tick.wrapping_add(1);
+                }
+                Command::none()
             }
 
             Message::CheckFirewall => {
@@ -282,6 +297,7 @@ impl Application for AirDropdApp {
 
             Message::StartScanning => {
                 self.is_scanning = true;
+                self.sonar_tick = 0;
                 self.status_message = "Scanning for devices...".to_string();
                 
                 let services = self.services.clone();
@@ -568,6 +584,11 @@ impl Application for AirDropdApp {
                 Command::none()
             }
 
+            Message::AutoAcceptIncomingChanged(value) => {
+                self.settings_view.set_auto_accept_incoming(value);
+                Command::none()
+            }
+
             Message::SaveSettings => {
                 let save_err = {
                     let mut cfg = match self.services.config.write() {
@@ -702,6 +723,46 @@ impl Application for AirDropdApp {
                     return self.update(Message::TrayAction(action.to_string()));
                 }
                 Command::none()
+            }
+
+            Message::PollIncomingTransfer => {
+                let gate = self.services.incoming_transfer.clone();
+                Command::perform(async move { gate.peek().await }, Message::UpdatePendingIncoming)
+            }
+
+            Message::UpdatePendingIncoming(pending) => {
+                let was_pending = self.pending_incoming.is_some();
+                self.pending_incoming = pending.clone();
+                if pending.is_some() && !was_pending {
+                    self.window_hidden = false;
+                    return Command::batch([
+                        window::change_mode(window::Id::MAIN, window::Mode::Windowed),
+                        window::gain_focus(window::Id::MAIN),
+                    ]);
+                }
+                Command::none()
+            }
+
+            Message::AcceptIncomingTransfer => {
+                let gate = self.services.incoming_transfer.clone();
+                self.pending_incoming = None;
+                Command::perform(
+                    async move {
+                        gate.respond(true).await;
+                    },
+                    |_| Message::Tick,
+                )
+            }
+
+            Message::RejectIncomingTransfer => {
+                let gate = self.services.incoming_transfer.clone();
+                self.pending_incoming = None;
+                Command::perform(
+                    async move {
+                        gate.respond(false).await;
+                    },
+                    |_| Message::Tick,
+                )
             }
 
             Message::PollReceived => {
@@ -863,8 +924,15 @@ impl Application for AirDropdApp {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
+        let refresh_secs = if self.is_scanning { 2 } else { 4 };
         let refresh = if matches!(self.current_view, AppView::Main) {
-            time::every(Duration::from_secs(3)).map(|_| Message::RefreshDevices)
+            time::every(Duration::from_secs(refresh_secs)).map(|_| Message::RefreshDevices)
+        } else {
+            Subscription::none()
+        };
+
+        let sonar = if matches!(self.current_view, AppView::Main) && self.is_scanning {
+            time::every(Duration::from_millis(120)).map(|_| Message::SonarTick)
         } else {
             Subscription::none()
         };
@@ -873,6 +941,9 @@ impl Application for AirDropdApp {
 
         let received_poll =
             time::every(Duration::from_millis(500)).map(|_| Message::PollReceived);
+
+        let incoming_poll =
+            time::every(Duration::from_millis(250)).map(|_| Message::PollIncomingTransfer);
 
         let window_events = event::listen_with(|event, _status| {
             if let Event::Window(_id, window::Event::CloseRequested) = event {
@@ -889,7 +960,15 @@ impl Application for AirDropdApp {
             Subscription::none()
         };
 
-        Subscription::batch([refresh, tray_poll, received_poll, window_events, splash])
+        Subscription::batch([
+            refresh,
+            sonar,
+            tray_poll,
+            received_poll,
+            incoming_poll,
+            window_events,
+            splash,
+        ])
     }
 
     fn theme(&self) -> Self::Theme {
@@ -912,12 +991,14 @@ impl AirDropdApp {
             &self.discovered_devices,
             self.selected_device.as_ref(),
             self.is_scanning,
+            self.sonar_tick,
             &self.airplay_status,
             &self.airdrop_status,
             self.file_transfer_progress,
             &self.notifications,
             self.show_link_dialog,
             &self.link_url,
+            self.pending_incoming.as_ref(),
             self.discovery_visibility,
             &self.theme,
         )
@@ -951,19 +1032,19 @@ impl AirDropdApp {
         let mut by_name: HashMap<String, String> = HashMap::new();
 
         if let Ok(devices) = services.device_discovery.lock().await.get_devices().await {
-            for mut device in devices {
-                if device.name.is_empty() {
-                    continue;
-                }
-                if device.name.to_lowercase() == our_name {
-                    continue;
-                }
-                if let Some(ip) = our_ip {
-                    if device.address == std::net::IpAddr::V4(ip) {
-                        continue;
-                    }
-                }
+            let mut collected: Vec<crate::network::DiscoveredDevice> = devices
+                .into_iter()
+                .filter(|device| {
+                    !device.name.is_empty()
+                        && device.name.to_lowercase() != our_name
+                        && our_ip
+                            .map(|ip| device.address != std::net::IpAddr::V4(ip))
+                            .unwrap_or(true)
+                })
+                .collect();
 
+            let mut probe_futures = Vec::new();
+            for (idx, device) in collected.iter().enumerate() {
                 if matches!(
                     device.service_type,
                     crate::network::ServiceType::AirDrop | crate::network::ServiceType::Companion
@@ -971,16 +1052,27 @@ impl AirDropdApp {
                     && !device.address.is_unspecified()
                 {
                     let addr = std::net::SocketAddr::new(device.address, device.port);
-                    if let Ok(Ok(Some(name))) = tokio::time::timeout(
-                        Duration::from_secs(2),
-                        crate::protocols::airdrop_client::AirDropClient::probe_discover(addr),
-                    )
-                    .await
-                    {
-                        device.name = name;
-                    }
+                    probe_futures.push(async move {
+                        let name = tokio::time::timeout(
+                            Duration::from_millis(1500),
+                            crate::protocols::airdrop_client::AirDropClient::probe_discover(addr),
+                        )
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .flatten();
+                        (idx, name)
+                    });
                 }
+            }
 
+            for (idx, name) in futures::future::join_all(probe_futures).await {
+                if let Some(name) = name {
+                    collected[idx].name = name;
+                }
+            }
+
+            for device in collected {
                 let key = format!("{}:{}", device.address, device.port);
                 if device.port > 0 {
                     by_name.insert(device.name.to_lowercase(), key.clone());
