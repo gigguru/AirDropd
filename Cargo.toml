@@ -1,0 +1,76 @@
+[package]
+name = "airdropd"
+version = "0.1.0"
+edition = "2021"
+description = "AirDrop and AirPlay for Windows"
+authors = ["Rhythmic Records"]
+license = "Proprietary"
+autobins = false
+autobenches = false
+autoexamples = false
+autotests = false
+
+[[bin]]
+name = "AirDropd"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[dependencies]
+tokio = { version = "1.28", features = ["full"] }
+mdns-sd = { version = "0.7.5", features = ["async"] }
+iced = { version = "0.12", features = ["tokio", "image", "svg"] }
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
+if-addrs = "0.10.1"
+local-ip-address = "0.5.1"
+socket2 = { version = "0.5", features = ["all"] }
+futures = "0.3"
+tokio-stream = { version = "0.1", features = ["net"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.3", features = ["v4", "serde"] }
+mime_guess = "2.0"
+image = { version = "0.24", default-features = false, features = ["png"] }
+windows = { version = "0.48", features = ["Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Devices_Bluetooth"] }
+hostname = "0.3"
+rfd = "0.11"  # Removed xdg-portal feature for Windows compatibility
+rcgen = "0.12"
+tokio-rustls = "0.23"
+rustls = "0.21"
+tokio-native-tls = "0.3"
+native-tls = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+# BLE support for AirDrop discovery
+btleplug = "0.11"
+# Enhanced crypto for Apple compatibility
+sha2 = "0.10"
+hmac = "0.12"
+# Better random generation for Apple-compatible IDs
+rand = "0.8"
+# Hex encoding for device hashes
+hex = "0.4"
+# AWDL protocol implementation
+owdl = { path = "OWDL", package = "OWDL" }
+# Additional dependencies for AWDL
+bytes = { version = "1.0", features = ["serde"] }
+byteorder = "1.4"
+env_logger = "0.10"
+clap = { version = "4.0", features = ["derive"] }
+hashbrown = "0.14"
+indexmap = "2.0"
+async-trait = "0.1"
+toml = "0.8"
+serde_yaml = "0.9"
+ring = "0.17"
+num_cpus = "1.0"
+bincode = "1.3"
+
+[patch.crates-io]
+winapi = { git = "https://github.com/retep998/winapi-rs", branch = "0.3" }

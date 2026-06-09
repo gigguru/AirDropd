@@ -1,0 +1,7 @@
+# Portable Windows executable: statically link the MSVC runtime so no
+# vcruntime140.dll / msvcp140.dll need to ship beside AirDropd.exe.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[build]
+jobs = 2
