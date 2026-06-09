@@ -7,3 +7,4 @@ pub use discovery::{DiscoveredDevice, ServiceType};
 
 pub mod ble;
 pub mod ble_advertise;
+pub mod firewall;

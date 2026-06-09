@@ -28,6 +28,12 @@ pub struct AppConfig {
     /// Whether this PC advertises itself for incoming AirDrop transfers.
     #[serde(default = "default_discoverable")]
     pub discoverable: bool,
+    /// User already added Windows Firewall exceptions (skip future prompts).
+    #[serde(default)]
+    pub firewall_exceptions_added: bool,
+    /// User dismissed the firewall prompt without adding rules.
+    #[serde(default)]
+    pub firewall_prompt_dismissed: bool,
 }
 
 fn default_discoverable() -> bool {
@@ -44,6 +50,8 @@ impl Default for AppConfig {
             device_id: Self::generate_device_id(),
             service_id: Self::generate_service_id(),
             discoverable: true,
+            firewall_exceptions_added: false,
+            firewall_prompt_dismissed: false,
         }
     }
 }

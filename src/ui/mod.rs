@@ -195,6 +195,76 @@ impl Application for AirDropdApp {
                 self.current_view = AppView::Main;
                 self.is_loading = false;
                 self.status_message = "Ready".to_string();
+                Command::perform(async {}, |_| Message::CheckFirewall)
+            }
+
+            Message::CheckFirewall => {
+                let skip = self
+                    .services
+                    .config
+                    .read()
+                    .map(|c| c.firewall_exceptions_added || c.firewall_prompt_dismissed)
+                    .unwrap_or(false);
+
+                if skip {
+                    return Command::perform(async {}, |_| Message::StartScanning);
+                }
+
+                Command::perform(
+                    async {
+                        tokio::task::spawn_blocking(|| {
+                            let audit = crate::network::firewall::audit();
+                            crate::network::firewall::prompt_and_fix(&audit)
+                        })
+                        .await
+                        .unwrap_or(crate::network::firewall::FirewallPromptResult::Failed(
+                            "Firewall check failed".to_string(),
+                        ))
+                    },
+                    Message::FirewallPromptComplete,
+                )
+            }
+
+            Message::FirewallPromptComplete(result) => {
+                match &result {
+                    crate::network::firewall::FirewallPromptResult::Added => {
+                        if let Ok(mut cfg) = self.services.config.write() {
+                            cfg.firewall_exceptions_added = true;
+                            cfg.firewall_prompt_dismissed = false;
+                            let _ = cfg.save();
+                        }
+                        self.add_notification(
+                            "Firewall updated".to_string(),
+                            "Windows Firewall exceptions were added for AirDropd.".to_string(),
+                            messages::NotificationType::Success,
+                        );
+                    }
+                    crate::network::firewall::FirewallPromptResult::Declined => {
+                        if let Ok(mut cfg) = self.services.config.write() {
+                            cfg.firewall_prompt_dismissed = true;
+                            let _ = cfg.save();
+                        }
+                        self.add_notification(
+                            "Firewall access".to_string(),
+                            "AirDropd may not work correctly until required ports are allowed in Windows Firewall.".to_string(),
+                            messages::NotificationType::Warning,
+                        );
+                    }
+                    crate::network::firewall::FirewallPromptResult::Failed(err) => {
+                        let ports = crate::network::firewall::format_port_list(
+                            crate::network::firewall::AIRDROP_PORTS,
+                        );
+                        self.add_notification(
+                            "Could not update firewall".to_string(),
+                            format!(
+                                "Try running AirDropd as Administrator, or allow these ports manually:\n{ports}\n\n{err}"
+                            ),
+                            messages::NotificationType::Warning,
+                        );
+                    }
+                    crate::network::firewall::FirewallPromptResult::NotNeeded => {}
+                }
+
                 Command::perform(async {}, |_| Message::StartScanning)
             }
 

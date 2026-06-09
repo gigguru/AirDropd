@@ -18,6 +18,8 @@ pub enum Message {
     InitializationComplete,
     SplashTick,
     SplashComplete,
+    CheckFirewall,
+    FirewallPromptComplete(crate::network::firewall::FirewallPromptResult),
     
     // Messaggi di discovery
     StartScanning,
