@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use sha2::{Digest, Sha256};
 use anyhow::Result;
 
+use super::apple_plist;
+
 /// Apple-specific TXT record generator for AirDrop mDNS services.
 pub struct AppleRecords;
 
@@ -14,18 +16,23 @@ impl AppleRecords {
         hex::encode(&hasher.finalize()[..6])
     }
 
-    /// Minimal Apple-compatible AirDrop TXT records (OpenDrop-compatible shape).
+    /// OpenDrop-compatible minimal TXT: only `flags` (required for /Discover probing).
+    pub fn create_airdrop_txt_records(discoverable: bool) -> Result<HashMap<String, String>> {
+        let mut properties = HashMap::new();
+        properties.insert(
+            "flags".to_string(),
+            apple_plist::receiver_flags(discoverable).to_string(),
+        );
+        Ok(properties)
+    }
+
+    /// Extended TXT records used by some Apple devices (optional enrichment).
     pub fn create_airdrop_txt_records_with_name(
         display_name: &str,
         device_ph: &str,
         discoverable: bool,
     ) -> Result<HashMap<String, String>> {
-        let mut properties = HashMap::new();
-        // 0x3fb = discoverable receiver capabilities; 0x82 = reduced visibility
-        properties.insert(
-            "flags".to_string(),
-            if discoverable { "1019".to_string() } else { "130".to_string() },
-        );
+        let mut properties = Self::create_airdrop_txt_records(discoverable)?;
         properties.insert("name".to_string(), display_name.to_string());
         properties.insert("model".to_string(), "Windows,1".to_string());
         properties.insert("ph".to_string(), device_ph.to_string());
@@ -33,6 +40,7 @@ impl AppleRecords {
         Ok(properties)
     }
 
+    #[allow(dead_code)]
     pub fn create_companion_txt_records_with_name(
         display_name: &str,
         device_id: &str,
@@ -50,6 +58,7 @@ impl AppleRecords {
         Ok(properties)
     }
 
+    #[allow(dead_code)]
     pub fn create_device_info_txt_records(device_ph: &str) -> Result<HashMap<String, String>> {
         let mut properties = HashMap::new();
         properties.insert("model".to_string(), "Windows,1".to_string());

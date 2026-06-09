@@ -868,7 +868,7 @@ impl AirDropdApp {
         let mut by_name: HashMap<String, String> = HashMap::new();
 
         if let Ok(devices) = services.device_discovery.lock().await.get_devices().await {
-            for device in devices {
+            for mut device in devices {
                 if device.name.is_empty() {
                     continue;
                 }
@@ -880,6 +880,24 @@ impl AirDropdApp {
                         continue;
                     }
                 }
+
+                if matches!(
+                    device.service_type,
+                    crate::network::ServiceType::AirDrop | crate::network::ServiceType::Companion
+                ) && device.port > 0
+                    && !device.address.is_unspecified()
+                {
+                    let addr = std::net::SocketAddr::new(device.address, device.port);
+                    if let Ok(Ok(Some(name))) = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        crate::protocols::airdrop_client::AirDropClient::probe_discover(addr),
+                    )
+                    .await
+                    {
+                        device.name = name;
+                    }
+                }
+
                 let key = format!("{}:{}", device.address, device.port);
                 if device.port > 0 {
                     by_name.insert(device.name.to_lowercase(), key.clone());

@@ -22,6 +22,9 @@ pub struct AppConfig {
     /// Stable device identifier for companion-link records.
     #[serde(default = "AppConfig::generate_device_id")]
     pub device_id: String,
+    /// Random 12-hex mDNS service instance id (OpenDrop-style).
+    #[serde(default = "AppConfig::generate_service_id")]
+    pub service_id: String,
     /// Whether this PC advertises itself for incoming AirDrop transfers.
     #[serde(default = "default_discoverable")]
     pub discoverable: bool,
@@ -39,6 +42,7 @@ impl Default for AppConfig {
             minimize_to_tray: true,
             device_ph: Self::generate_device_ph(),
             device_id: Self::generate_device_id(),
+            service_id: Self::generate_service_id(),
             discoverable: true,
         }
     }
@@ -59,6 +63,10 @@ impl AppConfig {
         uuid::Uuid::new_v4().simple().to_string().to_uppercase()
     }
 
+    pub fn generate_service_id() -> String {
+        format!("{:012x}", rand::random::<u64>() & 0xFFFFFFFFFFFF)
+    }
+
     pub fn device_ph_bytes(&self) -> [u8; 6] {
         let mut out = [0u8; 6];
         let bytes = hex::decode(&self.device_ph).unwrap_or_else(|_| {
@@ -76,6 +84,9 @@ impl AppConfig {
         }
         if self.device_id.is_empty() {
             self.device_id = Self::generate_device_id();
+        }
+        if self.service_id.len() != 12 {
+            self.service_id = Self::generate_service_id();
         }
         if self.broadcast_name.trim().is_empty() {
             self.broadcast_name = default_broadcast_name();

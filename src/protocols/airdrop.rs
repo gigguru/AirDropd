@@ -85,7 +85,7 @@ impl AirDrop {
             .unwrap_or_else(|_| crate::config::default_broadcast_name())
     }
 
-    fn mdns_instance_name() -> String {
+    fn mdns_host_name() -> String {
         hostname::get()
             .ok()
             .map(|h| h.to_string_lossy().to_string())
@@ -113,7 +113,7 @@ impl AirDrop {
     }
 
     async fn register_mdns_services(&self) -> Result<()> {
-        let (broadcast_name, device_ph, device_id, discoverable) = {
+        let (broadcast_name, device_ph, service_id, discoverable) = {
             let cfg = self
                 .config
                 .read()
@@ -121,7 +121,7 @@ impl AirDrop {
             (
                 cfg.broadcast_name.clone(),
                 cfg.device_ph.clone(),
-                cfg.device_id.clone(),
+                cfg.service_id.clone(),
                 cfg.discoverable,
             )
         };
@@ -131,68 +131,35 @@ impl AirDrop {
             return Ok(());
         }
 
-        let instance = Self::mdns_instance_name();
+        let host = Self::mdns_host_name();
+        let instance = service_id;
         let airdrop_properties = AppleRecords::create_airdrop_txt_records_with_name(
             &broadcast_name,
             &device_ph,
             discoverable,
         )?;
-        let companion_properties = AppleRecords::create_companion_txt_records_with_name(
-            &broadcast_name,
-            &device_id,
-            &device_ph,
-        )?;
-        let device_info_properties = AppleRecords::create_device_info_txt_records(&device_ph)?;
 
-        let host_fqdn = format!("{}.local.", instance);
+        let host_fqdn = format!("{}.local.", host);
         let ip = primary_ipv4()?.to_string();
 
-        let services = [
-            ServiceInfo::new(
-                "_airdrop._tcp.local.",
-                &instance,
-                &host_fqdn,
-                &ip,
-                8770,
-                Some(airdrop_properties.clone()),
-            )?,
-            ServiceInfo::new(
-                "_airdrop._udp.local.",
-                &instance,
-                &host_fqdn,
-                &ip,
-                8770,
-                Some(airdrop_properties),
-            )?,
-            ServiceInfo::new(
-                "_companion-link._tcp.local.",
-                &instance,
-                &host_fqdn,
-                &ip,
-                7001,
-                Some(companion_properties),
-            )?,
-            ServiceInfo::new(
-                "_device-info._tcp.local.",
-                &instance,
-                &host_fqdn,
-                &ip,
-                7002,
-                Some(device_info_properties),
-            )?,
-        ];
+        let service = ServiceInfo::new(
+            "_airdrop._tcp.local.",
+            &instance,
+            &host_fqdn,
+            &ip,
+            8770,
+            Some(airdrop_properties),
+        )?;
 
         let mut registered = self.registered_services.lock().await;
-        for service in services {
-            let fullname = service.get_fullname().to_string();
-            self.mdns
-                .register(service)
-                .map_err(|e| anyhow!("Failed to register mDNS service {}: {}", fullname, e))?;
-            registered.push(fullname);
-        }
+        let fullname = service.get_fullname().to_string();
+        self.mdns
+            .register(service)
+            .map_err(|e| anyhow!("Failed to register mDNS service {}: {}", fullname, e))?;
+        registered.push(fullname);
 
         info!(
-            "Registered mDNS services as \"{}\" ({}) on {}",
+            "Registered _airdrop._tcp as \"{}\" ({}) on {}:8770",
             broadcast_name, host_fqdn, ip
         );
         Ok(())
