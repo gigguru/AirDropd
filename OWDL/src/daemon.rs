@@ -2,10 +2,8 @@
 
 use std::sync::Arc;
 
-use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, watch};
-use tracing::{info, warn};
 
 use crate::peers::PeerTable;
 use crate::transport::{self, InfraTransport, TransportEvent};
@@ -131,7 +129,7 @@ pub(crate) struct DaemonRuntime {
 impl DaemonRuntime {
     pub async fn start_tasks(self: Arc<Self>) {
         let transport = self.transport.clone();
-        let mut shutdown_rx = self.shutdown.subscribe();
+        let shutdown_rx = self.shutdown.subscribe();
         tokio::spawn(async move {
             transport.run_rx(shutdown_rx).await;
         });

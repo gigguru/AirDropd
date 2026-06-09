@@ -15,7 +15,7 @@ env:
 
 jobs:
   build:
-    name: Portable AirDropd.exe
+    name: AirDropd.exe + Setup installer
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -47,7 +47,21 @@ jobs:
           $sizeMb = [math]::Round((Get-Item $exe).Length / 1MB, 2)
           Write-Host "Built portable AirDropd.exe ($sizeMb MB)"
 
-      - name: Upload artifact
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build AirDropd Setup.exe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\AirDropd.iss"
+          if (-not (Test-Path "dist\AirDropd Setup.exe")) {
+            Write-Error "AirDropd Setup.exe was not produced"
+          }
+          $setupMb = [math]::Round((Get-Item "dist\AirDropd Setup.exe").Length / 1MB, 2)
+          Write-Host "Built AirDropd Setup.exe ($setupMb MB)"
+
+      - name: Upload portable executable
         uses: actions/upload-artifact@v7
         with:
           name: AirDropd-windows-x86_64
@@ -55,11 +69,21 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Upload installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: AirDropd-Setup-windows-x86_64
+          path: dist/AirDropd Setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
-          files: target/release/AirDropd.exe
+          files: |
+            target/release/AirDropd.exe
+            dist/AirDropd Setup.exe
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

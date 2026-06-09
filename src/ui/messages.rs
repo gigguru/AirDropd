@@ -16,6 +16,8 @@ pub enum Message {
     WindowResized(u32, u32),
     ThemeChanged(crate::ui::Theme),
     InitializationComplete,
+    SplashTick,
+    SplashComplete,
     
     // Messaggi di discovery
     StartScanning,
@@ -69,6 +71,27 @@ pub enum Message {
     
     // Messaggi per la navigazione
     ShowMainView,
+    ShowSettings,
+    ShowAbout,
+
+    // User settings
+    BroadcastNameChanged(String),
+    DownloadDirChanged(String),
+    BrowseDownloadDir,
+    DownloadDirSelected(Option<PathBuf>),
+    MinimizeToTrayChanged(bool),
+    SaveSettings,
+    ResetSettings,
+
+    // System tray / window
+    TrayAction(String),
+    WindowCloseRequested,
+    WindowMinimized,
+    ShowWindow,
+    FileReceived(PathBuf),
+    QuitApp,
+    PollTray,
+    PollReceived,
 
     // Discovery visibility (macOS AirDrop-style)
     VisibilityChanged(crate::ui::views::settings_view::AirDropVisibility),

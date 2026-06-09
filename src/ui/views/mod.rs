@@ -6,3 +6,4 @@
 pub mod main_view;
 pub mod settings_view;
 pub mod about_view;
+pub mod splash_view;

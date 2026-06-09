@@ -17,6 +17,7 @@ use std::net::{SocketAddr, IpAddr, Ipv4Addr};
 use socket2::{Socket, Domain, Type, Protocol};
 use super::apple_records::AppleRecords;
 use super::http_server::AirDropHttpServer;
+use crate::config::SharedConfig;
 use crate::network::util::primary_ipv4;
 use mime_guess;
 
@@ -53,11 +54,13 @@ pub struct AirDrop {
     udp_socket: Arc<Mutex<Option<UdpSocket>>>,
     http_server: Arc<Mutex<Option<AirDropHttpServer>>>,
     pub status: Arc<Mutex<AirDropStatus>>,
+    config: SharedConfig,
+    received_tx: Option<tokio::sync::broadcast::Sender<PathBuf>>,
 }
 
 
 impl AirDrop {
-    pub fn new() -> Self {
+    pub fn new(config: SharedConfig, received_tx: tokio::sync::broadcast::Sender<PathBuf>) -> Self {
         Self {
             current_file: Arc::new(Mutex::new(None)),
             transfer_progress: Arc::new(Mutex::new(0.0)),
@@ -66,6 +69,35 @@ impl AirDrop {
             udp_socket: Arc::new(Mutex::new(None)),
             http_server: Arc::new(Mutex::new(None)),
             status: Arc::new(Mutex::new(AirDropStatus::Idle)),
+            config,
+            received_tx: Some(received_tx),
+        }
+    }
+
+    fn broadcast_name(&self) -> String {
+        self.config
+            .read()
+            .map(|c| c.broadcast_name.clone())
+            .unwrap_or_else(|_| crate::config::default_broadcast_name())
+    }
+
+    fn mdns_instance_name(name: &str) -> String {
+        let sanitized: String = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else if c.is_whitespace() {
+                    '-'
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if sanitized.is_empty() {
+            "AirDropd".to_string()
+        } else {
+            sanitized
         }
     }
 
@@ -182,50 +214,50 @@ impl AirDrop {
 
     async fn register_mdns_services(&self) -> Result<()> {
         let mdns = ServiceDaemon::new().map_err(|e| anyhow!("Failed to initialize mDNS: {}", e))?;
-        
-        // Use Apple-compatible TXT records
-        let airdrop_properties = AppleRecords::create_airdrop_txt_records()?;
-        let companion_properties = AppleRecords::create_companion_txt_records()?;
+
+        let broadcast_name = self.broadcast_name();
+        let instance = Self::mdns_instance_name(&broadcast_name);
+
+        let airdrop_properties =
+            AppleRecords::create_airdrop_txt_records_with_name(&broadcast_name)?;
+        let companion_properties =
+            AppleRecords::create_companion_txt_records_with_name(&broadcast_name)?;
         let device_info_properties = AppleRecords::create_device_info_txt_records()?;
-        
+
         let hostname = hostname::get()?.to_string_lossy().to_string();
         let host_fqdn = format!("{}.local.", hostname);
         let ip = primary_ipv4()?.to_string();
-        
-        // Register AirDrop TCP service on standard port
+
         let airdrop_tcp_service = ServiceInfo::new(
             "_airdrop._tcp.local.",
-            &hostname,
+            &instance,
             &host_fqdn,
             &ip,
-            8770, // Standard AirDrop HTTPS port
-            Some(airdrop_properties.clone())
+            8770,
+            Some(airdrop_properties.clone()),
         )?;
 
-        // Register AirDrop UDP service
         let airdrop_udp_service = ServiceInfo::new(
             "_airdrop._udp.local.",
-            &hostname,
+            &instance,
             &host_fqdn,
             &ip,
-            8770, // Standard AirDrop HTTPS port
+            8770,
             Some(airdrop_properties)
         )?;
 
-        // Register Companion Link service (for device pairing)
         let companion_service = ServiceInfo::new(
             "_companion-link._tcp.local.",
-            &hostname,
+            &instance,
             &host_fqdn,
             &ip,
             7001,
             Some(companion_properties)
         )?;
 
-        // Register Device Info service
         let device_info_service = ServiceInfo::new(
             "_device-info._tcp.local.",
-            &hostname,
+            &instance,
             &host_fqdn,
             &ip,
             7002,
@@ -242,7 +274,10 @@ impl AirDrop {
         mdns.register(device_info_service)
             .map_err(|e| anyhow!("Failed to register Device Info service: {}", e))?;
 
-        info!("Successfully registered Apple-compatible mDNS services on {} ({})", host_fqdn, ip);
+        info!(
+            "Registered mDNS services as \"{}\" on {} ({})",
+            broadcast_name, host_fqdn, ip
+        );
         *self.mdns.lock().await = Some(mdns);
 
         // Setup UDP multicast with explicit binding to all interfaces
@@ -334,7 +369,10 @@ impl AirDrop {
         self.register_mdns_services().await?;
 
         // Initialize and start HTTPS server for AirDrop protocol
-        let mut http_server = AirDropHttpServer::new(8770); // Use standard AirDrop port
+        let mut http_server = AirDropHttpServer::new(8770, self.config.clone());
+        if let Some(tx) = &self.received_tx {
+            http_server = http_server.with_received_notifier(tx.clone());
+        }
         http_server.initialize().await?;
         http_server.start().await?;
         

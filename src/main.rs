@@ -1,91 +1,115 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![warn(unused_imports, unused_mut)]
+#![allow(dead_code, mismatched_lifetime_syntaxes)]
+
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-// Expose crate modules
+mod config;
 mod network;
 mod protocols;
 mod ui;
 mod utils;
 
+use config::{shared, AppConfig};
 use network::discovery::DeviceDiscovery;
 use network::ble::BleManager;
 use protocols::airdrop::AirDrop;
 use protocols::airplay::AirPlay;
 use protocols::awdl::{AwdlManager, AwdlManagerConfig};
+use std::path::PathBuf;
 
-/// Struttura principale dell'applicazione AirDropd
+/// Core background services for AirDropd.
 pub struct AirDropdServices {
+    pub config: config::SharedConfig,
     pub device_discovery: Arc<Mutex<DeviceDiscovery>>,
     pub airdrop: Arc<Mutex<AirDrop>>,
     pub airplay: Arc<Mutex<AirPlay>>,
     pub ble: Arc<Mutex<BleManager>>,
     pub awdl: Arc<Mutex<AwdlManager>>,
+    pub received_tx: tokio::sync::broadcast::Sender<PathBuf>,
 }
 
 impl AirDropdServices {
-    /// Crea una nuova istanza dei servizi AirDropd
-    pub async fn new() -> anyhow::Result<Self> {
-        // Construct services with correct constructors
+    pub async fn new(app_config: config::SharedConfig) -> anyhow::Result<Self> {
+        let (received_tx, _) = tokio::sync::broadcast::channel(16);
+
         let discovery = DeviceDiscovery::new()?;
-        let airdrop = AirDrop::new();
+        let airdrop = AirDrop::new(app_config.clone(), received_tx.clone());
         let airplay = AirPlay::new();
         let ble = BleManager::new().await?;
         let awdl = AwdlManager::new(AwdlManagerConfig::default());
 
         Ok(Self {
+            config: app_config,
             device_discovery: Arc::new(Mutex::new(discovery)),
             airdrop: Arc::new(Mutex::new(airdrop)),
             airplay: Arc::new(Mutex::new(airplay)),
             ble: Arc::new(Mutex::new(ble)),
             awdl: Arc::new(Mutex::new(awdl)),
+            received_tx,
         })
     }
-    
-    /// Inizializza tutti i servizi
+
     pub async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Inizializza device discovery (mDNS)
         {
             let discovery = self.device_discovery.lock().await;
             discovery.start_discovery().await?;
         }
 
-        // Avvia AirDrop HTTPS server e servizi mDNS
         {
             let airdrop = self.airdrop.lock().await;
             airdrop.start_server().await?;
         }
 
-        // Avvia server AirPlay per ricezione
         {
             let airplay = self.airplay.lock().await;
             airplay.start_server().await?;
         }
 
-        // Inizializza BLE (scan + advertise so iPhones can discover this PC)
         {
+            let broadcast_name = self
+                .config
+                .read()
+                .map(|c| c.broadcast_name.clone())
+                .unwrap_or_else(|_| config::default_broadcast_name());
+
             let mut ble = self.ble.lock().await;
             ble.initialize().await?;
-            ble.start_advertising().await?;
+            ble.start_advertising_with_name(&broadcast_name).await?;
         }
 
-        // Inizializza e avvia AWDL
         {
             let mut awdl = self.awdl.lock().await;
             awdl.initialize().await?;
         }
-        
-        // Keep AWDL peer table fresh
+
         {
             let awdl = self.awdl.lock().await;
             awdl.refresh_peers().await;
         }
-        
+
+        Ok(())
+    }
+
+    /// Apply saved settings to live discovery services (BLE name, etc.).
+    pub async fn apply_settings(&self) -> anyhow::Result<()> {
+        let broadcast_name = self
+            .config
+            .read()
+            .map(|c| c.broadcast_name.clone())
+            .unwrap_or_else(|_| config::default_broadcast_name());
+
+        {
+            let ble = self.ble.lock().await;
+            ble.restart_advertising(&broadcast_name).await?;
+        }
+
         Ok(())
     }
 }
 
-/// Background task: periodically refresh AWDL peers while services run.
-pub async fn awdl_peer_refresh_loop(services: std::sync::Arc<AirDropdServices>) {
+pub async fn awdl_peer_refresh_loop(services: Arc<AirDropdServices>) {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
     loop {
         interval.tick().await;
@@ -94,29 +118,48 @@ pub async fn awdl_peer_refresh_loop(services: std::sync::Arc<AirDropdServices>) 
     }
 }
 
+fn init_logging() {
+    #[cfg(debug_assertions)]
+    {
+        let _ = env_logger::try_init();
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        use tracing_subscriber::EnvFilter;
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("airdropd=info")),
+            )
+            .with_writer(std::io::sink)
+            .try_init();
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Inizializza il logger
-    env_logger::init();
-    
-    // Crea un runtime separato per i servizi di background
+    init_logging();
+
+    let cfg = AppConfig::load();
+    let app_config = shared(cfg);
+
     let runtime = tokio::runtime::Runtime::new()?;
-    
-    // Crea i servizi AirDropd nel runtime
+
     let services = runtime.block_on(async {
-        match AirDropdServices::new().await {
+        match AirDropdServices::new(app_config).await {
             Ok(s) => Arc::new(s),
             Err(e) => {
+                #[cfg(debug_assertions)]
                 eprintln!("Error creating services: {}", e);
                 std::process::exit(1);
             }
         }
     });
-    
-    // Inizializza i servizi in background
+
     let services_clone = services.clone();
     runtime.spawn(async move {
         if let Err(e) = services_clone.initialize().await {
-            eprintln!("Error initializing services: {}", e);
+            tracing::error!("Error initializing services: {}", e);
         }
     });
 
@@ -124,20 +167,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     runtime.spawn(async move {
         awdl_peer_refresh_loop(awdl_refresh).await;
     });
-    
-    // Mantieni il runtime attivo in un thread separato
+
     std::thread::spawn(move || {
         runtime.block_on(async {
-            // Mantieni il runtime attivo
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
             }
         });
     });
-    
-    // Avvia l'interfaccia utente Iced nel thread principale
-    // Iced gestisce il proprio event loop, quindi non serve async qui
+
     ui::run(services)?;
-    
+
     Ok(())
 }

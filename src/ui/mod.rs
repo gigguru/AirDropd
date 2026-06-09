@@ -5,7 +5,9 @@
 
 use iced::{
     executor,
-    Application, Command, Element, Settings, Subscription, Theme as IcedTheme,
+    event,
+    window,
+    Application, Command, Element, Event, Settings, Subscription, Theme as IcedTheme,
     time,
 };
 
@@ -15,8 +17,10 @@ use std::time::Duration;
 
 // Moduli pub mod app;
 pub mod components;
+pub mod assets;
 pub mod messages;
 pub mod styles;
+pub mod tray;
 pub mod views;
 pub mod widgets;
 
@@ -83,7 +87,17 @@ pub struct AirDropdApp {
     
     /// Messaggio di stato
     status_message: String,
-} 
+
+    /// Main window hidden in system tray
+    window_hidden: bool,
+
+    /// Subscription to incoming file notifications
+    received_rx: Option<tokio::sync::broadcast::Receiver<std::path::PathBuf>>,
+
+    /// Splash animation state
+    splash_frames: assets::SplashFrames,
+    splash_tick: usize,
+}
 
 /// Viste disponibili nell'applicazione
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +110,8 @@ pub enum AppView {
     About,
     /// Vista di caricamento iniziale
     Loading,
+    /// Startup splash with branded icon animation
+    Splash,
 }
 
 impl Default for AppView {
@@ -111,31 +127,25 @@ impl Application for AirDropdApp {
     type Flags = Arc<crate::AirDropdServices>;
 
     fn new(services: Self::Flags) -> (Self, Command<Self::Message>) {
+        let cfg = services
+            .config
+            .read()
+            .map(|c| c.clone())
+            .unwrap_or_default();
+        let tray_name = cfg.broadcast_name.clone();
+        let settings_view = views::settings_view::SettingsView::from_config(&cfg);
+        let received_rx = services.received_tx.subscribe();
+
+        let _ = tray::init_tray(&format!("AirDropd — {}", tray_name));
+
         let app = Self {
             services,
-            current_view: AppView::Loading,
-            status_message: "Initializing...".to_string(),
+            current_view: AppView::Splash,
+            status_message: "Starting...".to_string(),
             is_loading: true,
             theme: Theme::default(),
             discovery_visibility: views::settings_view::AirDropVisibility::Everyone,
-            settings_view: views::settings_view::SettingsView::new(
-                true,                // enable_auto_discovery
-                15,                  // discovery_interval
-                true,                // show_notifications
-                false,               // minimize_to_tray
-                true,                // airdrop_enabled
-                views::settings_view::AirDropVisibility::Everyone,
-                false,               // auto_accept_from_contacts
-                true,                // airplay_enabled
-                views::settings_view::AirPlayQuality::Auto,
-                false,               // airplay_audio_only
-                None,                // network_interface
-                Vec::new(),          // available_interfaces
-                None,                // custom_port
-                false,               // debug_mode
-                views::settings_view::LogLevel::Info,
-                2,                   // max_concurrent_transfers
-            ),
+            settings_view,
             about_view: views::about_view::AboutView::new(
                 "0.1.0".to_string(),
                 "unknown".to_string(),
@@ -150,17 +160,13 @@ impl Application for AirDropdApp {
             notifications: Vec::new(),
             show_link_dialog: false,
             link_url: String::new(),
+            window_hidden: false,
+            received_rx: Some(received_rx),
+            splash_frames: assets::SplashFrames::new(),
+            splash_tick: 0,
         };
 
-        let command = Command::perform(
-            async {
-                // Simula inizializzazione
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            },
-            |_| Message::InitializationComplete,
-        );
-
-        (app, command)
+        (app, Command::none())
     }
 
     fn title(&self) -> String {
@@ -168,12 +174,30 @@ impl Application for AirDropdApp {
             AppView::Main => "AirDropd".to_string(),
             AppView::Settings => "AirDropd — Settings".to_string(),
             AppView::About => "AirDropd — About".to_string(),
-            AppView::Loading => "AirDropd".to_string(),
+            AppView::Loading | AppView::Splash => "AirDropd".to_string(),
         }
     }
 
     fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
         match message {
+            Message::SplashTick => {
+                if self.current_view != AppView::Splash {
+                    return Command::none();
+                }
+                self.splash_tick = self.splash_tick.saturating_add(1);
+                if self.splash_tick >= assets::SPLASH_TOTAL_TICKS {
+                    return Command::perform(async {}, |_| Message::SplashComplete);
+                }
+                Command::none()
+            }
+
+            Message::SplashComplete => {
+                self.current_view = AppView::Main;
+                self.is_loading = false;
+                self.status_message = "Ready".to_string();
+                Command::perform(async {}, |_| Message::StartScanning)
+            }
+
             Message::InitializationComplete => {
                 self.current_view = AppView::Main;
                 self.is_loading = false;
@@ -392,13 +416,341 @@ impl Application for AirDropdApp {
                                 let _ = ble.stop_advertising().await;
                             }
                             _ => {
-                                let _ = ble.start_advertising().await;
+                                let name = services
+                                    .config
+                                    .read()
+                                    .map(|c| c.broadcast_name.clone())
+                                    .unwrap_or_else(|_| crate::config::default_broadcast_name());
+                                let _ = ble.start_advertising_with_name(&name).await;
                             }
                         }
                     },
                     |_| Message::RefreshDevices,
                 )
             }
+
+            Message::ShowSettings => {
+                self.current_view = AppView::Settings;
+                Command::none()
+            }
+
+            Message::ShowMainView => {
+                self.current_view = AppView::Main;
+                Command::none()
+            }
+
+            Message::BroadcastNameChanged(name) => {
+                self.settings_view.set_broadcast_name(name);
+                Command::none()
+            }
+
+            Message::DownloadDirChanged(path) => {
+                self.settings_view.set_download_dir_text(path);
+                Command::none()
+            }
+
+            Message::BrowseDownloadDir => Command::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Choose download folder")
+                        .pick_folder()
+                        .await
+                        .map(|h| h.path().to_path_buf())
+                },
+                Message::DownloadDirSelected,
+            ),
+
+            Message::DownloadDirSelected(path) => {
+                if let Some(dir) = path {
+                    self.settings_view
+                        .set_download_dir_text(dir.display().to_string());
+                }
+                Command::none()
+            }
+
+            Message::MinimizeToTrayChanged(value) => {
+                self.settings_view.set_minimize_to_tray(value);
+                Command::none()
+            }
+
+            Message::SaveSettings => {
+                let save_err = {
+                    let mut cfg = match self.services.config.write() {
+                        Ok(c) => c,
+                        Err(_) => return Command::none(),
+                    };
+                    self.settings_view.apply_to_config(&mut cfg);
+                    cfg.save().err()
+                };
+                if let Some(e) = save_err {
+                    self.add_notification(
+                        "Settings".to_string(),
+                        format!("Could not save settings: {}", e),
+                        messages::NotificationType::Error,
+                    );
+                    return Command::none();
+                }
+
+                {
+                    let name = self
+                        .services
+                        .config
+                        .read()
+                        .map(|c| c.broadcast_name.clone())
+                        .unwrap_or_else(|_| crate::config::default_broadcast_name());
+                    tray::set_tooltip(&format!("AirDropd — {}", name));
+                }
+
+                let services = self.services.clone();
+                self.add_notification(
+                    "Settings saved".to_string(),
+                    "Your preferences have been saved.".to_string(),
+                    messages::NotificationType::Success,
+                );
+                Command::perform(
+                    async move {
+                        services.apply_settings().await.map_err(|e| e.to_string())
+                    },
+                    |res| match res {
+                        Ok(()) => Message::ShowMainView,
+                        Err(e) => Message::Error(e),
+                    },
+                )
+            }
+
+            Message::ResetSettings => {
+                let defaults = crate::config::AppConfig::default();
+                self.settings_view = views::settings_view::SettingsView::from_config(&defaults);
+                Command::none()
+            }
+
+            Message::WindowCloseRequested => {
+                let minimize = self
+                    .services
+                    .config
+                    .read()
+                    .map(|c| c.minimize_to_tray)
+                    .unwrap_or(true);
+                if minimize {
+                    self.window_hidden = true;
+                    Command::batch([
+                        window::change_mode(window::Id::MAIN, window::Mode::Hidden),
+                    ])
+                } else {
+                    Command::perform(async {}, |_| Message::QuitApp)
+                }
+            }
+
+            Message::WindowMinimized => {
+                let minimize = self
+                    .services
+                    .config
+                    .read()
+                    .map(|c| c.minimize_to_tray)
+                    .unwrap_or(true);
+                if minimize {
+                    self.window_hidden = true;
+                    Command::batch([
+                        window::change_mode(window::Id::MAIN, window::Mode::Hidden),
+                    ])
+                } else {
+                    Command::none()
+                }
+            }
+
+            Message::ShowWindow => {
+                self.window_hidden = false;
+                Command::batch([
+                    window::change_mode(window::Id::MAIN, window::Mode::Windowed),
+                    window::gain_focus(window::Id::MAIN),
+                ])
+            }
+
+            Message::TrayAction(action) => match action.as_str() {
+                "show" => {
+                    self.window_hidden = false;
+                    Command::batch([
+                        window::change_mode(window::Id::MAIN, window::Mode::Windowed),
+                        window::gain_focus(window::Id::MAIN),
+                    ])
+                }
+                "quit" => Command::perform(async { std::process::exit(0) }, |_| Message::Tick),
+                _ => Command::none(),
+            },
+
+            Message::QuitApp => Command::perform(async { std::process::exit(0) }, |_| Message::Tick),
+
+            Message::FileReceived(path) => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file".to_string());
+                self.add_notification(
+                    "File received".to_string(),
+                    format!("Saved to AirDropd folder: {}", name),
+                    messages::NotificationType::Success,
+                );
+                Command::none()
+            }
+
+            Message::Error(msg) => {
+                self.add_notification(
+                    "Error".to_string(),
+                    msg,
+                    messages::NotificationType::Error,
+                );
+                Command::none()
+            }
+
+            Message::PollTray => {
+                if let Some(action) = tray::poll_tray_action() {
+                    return self.update(Message::TrayAction(action.to_string()));
+                }
+                Command::none()
+            }
+
+            Message::PollReceived => {
+                let paths: Vec<std::path::PathBuf> = if let Some(rx) = self.received_rx.as_mut() {
+                    let mut paths = Vec::new();
+                    while let Ok(path) = rx.try_recv() {
+                        paths.push(path);
+                    }
+                    paths
+                } else {
+                    Vec::new()
+                };
+                for path in paths {
+                    self.add_notification(
+                        "File received".to_string(),
+                        format!(
+                            "Saved: {}",
+                            path.file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| path.display().to_string())
+                        ),
+                        messages::NotificationType::Success,
+                    );
+                }
+                Command::none()
+            }
+
+            Message::ShowAbout => {
+                self.current_view = AppView::About;
+                Command::none()
+            }
+
+            Message::OpenLogFolder => {
+                let path = crate::config::config_path();
+                let folder = path
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(crate::config::config_path);
+                Command::perform(
+                    async move {
+                        open_folder(&folder).map_err(|e| e.to_string())
+                    },
+                    |res| match res {
+                        Ok(()) => Message::Info("Opened AirDropd data folder.".into()),
+                        Err(e) => Message::Error(e),
+                    },
+                )
+            }
+
+            Message::ClearCache => Command::perform(
+                async {
+                    let tmp = std::env::temp_dir();
+                    let mut removed = 0usize;
+                    if let Ok(entries) = std::fs::read_dir(&tmp) {
+                        for entry in entries.flatten() {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            if name.starts_with("AirDrop") {
+                                if std::fs::remove_file(entry.path()).is_ok() {
+                                    removed += 1;
+                                }
+                            }
+                        }
+                    }
+                    Ok::<usize, String>(removed)
+                },
+                |res| match res {
+                    Ok(n) => Message::Info(format!("Removed {n} temporary AirDrop file(s).")),
+                    Err(e) => Message::Error(e),
+                },
+            ),
+
+            Message::RunDiagnostics => {
+                let services = self.services.clone();
+                Command::perform(
+                    async move {
+                        let mut lines = Vec::new();
+                        lines.push(format!("AirDropd {}", env!("CARGO_PKG_VERSION")));
+                        lines.push(format!(
+                            "Broadcast: {}",
+                            services
+                                .config
+                                .read()
+                                .map(|c| c.broadcast_name.clone())
+                                .unwrap_or_else(|_| "unknown".into())
+                        ));
+                        let ble = services.ble.lock().await;
+                        lines.push(format!(
+                            "BLE scanning: {}",
+                            if ble.is_scanning().await { "yes" } else { "no" }
+                        ));
+                        lines.push(format!(
+                            "BLE advertising: {}",
+                            if ble.is_advertising().await { "yes" } else { "no" }
+                        ));
+                        drop(ble);
+                        let awdl = services.awdl.lock().await;
+                        let peers = awdl.get_peers().await;
+                        lines.push(format!("AWDL peers: {}", peers.len()));
+                        lines.join("\n")
+                    },
+                    Message::Info,
+                )
+            }
+
+            Message::Info(msg) => {
+                self.add_notification(
+                    "AirDropd".to_string(),
+                    msg,
+                    messages::NotificationType::Info,
+                );
+                Command::none()
+            }
+
+            Message::OpenWebsite => Command::perform(
+                async {
+                    open_url("https://github.com/gigguru/AirDropd").map_err(|e| e.to_string())
+                },
+                |res| match res {
+                    Ok(()) => Message::Tick,
+                    Err(e) => Message::Error(e),
+                },
+            ),
+
+            Message::OpenDocumentation => Command::perform(
+                async {
+                    open_url("https://github.com/gigguru/AirDropd#readme")
+                        .map_err(|e| e.to_string())
+                },
+                |res| match res {
+                    Ok(()) => Message::Tick,
+                    Err(e) => Message::Error(e),
+                },
+            ),
+
+            Message::OpenIssues => Command::perform(
+                async {
+                    open_url("https://github.com/gigguru/AirDropd/issues")
+                        .map_err(|e| e.to_string())
+                },
+                |res| match res {
+                    Ok(()) => Message::Tick,
+                    Err(e) => Message::Error(e),
+                },
+            ),
 
             // Handle all other message variants with a wildcard pattern
             _ => Command::none(),
@@ -407,6 +759,7 @@ impl Application for AirDropdApp {
 
     fn view(&self) -> Element<Self::Message> {
         match self.current_view {
+            AppView::Splash => views::splash_view::render(&self.splash_frames, self.splash_tick),
             AppView::Loading => self.loading_view(),
             AppView::Main => self.main_view(),
             AppView::Settings => self.settings_view(),
@@ -415,11 +768,33 @@ impl Application for AirDropdApp {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        if matches!(self.current_view, AppView::Main) {
+        let refresh = if matches!(self.current_view, AppView::Main) {
             time::every(Duration::from_secs(3)).map(|_| Message::RefreshDevices)
         } else {
             Subscription::none()
-        }
+        };
+
+        let tray_poll = time::every(Duration::from_millis(300)).map(|_| Message::PollTray);
+
+        let received_poll =
+            time::every(Duration::from_millis(500)).map(|_| Message::PollReceived);
+
+        let window_events = event::listen_with(|event, _status| {
+            if let Event::Window(_id, window::Event::CloseRequested) = event {
+                Some(Message::WindowCloseRequested)
+            } else {
+                None
+            }
+        });
+
+        let splash = if matches!(self.current_view, AppView::Splash) {
+            time::every(Duration::from_millis(assets::SPLASH_TICK_MS))
+                .map(|_| Message::SplashTick)
+        } else {
+            Subscription::none()
+        };
+
+        Subscription::batch([refresh, tray_poll, received_poll, window_events, splash])
     }
 
     fn theme(&self) -> Self::Theme {
@@ -546,6 +921,41 @@ impl AirDropdApp {
     }
 }
 
+fn open_folder(path: &std::path::Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err("Open folder is only supported on Windows".into())
+    }
+}
+
+fn open_url(url: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
 /// Funzione principale per avviare l'applicazione
 pub fn run(services: Arc<crate::AirDropdServices>) -> iced::Result {
     // Prefer DirectX 12 backend on Windows to avoid Vulkan validation spam
@@ -553,6 +963,8 @@ pub fn run(services: Arc<crate::AirDropdServices>) -> iced::Result {
     // These can be overridden by user environment variables if needed.
     std::env::set_var("WGPU_BACKEND", "dx12");
     std::env::set_var("WGPU_VALIDATION", "0");
+
+    let window_icon = assets::load_window_icon();
 
     AirDropdApp::run(Settings {
         flags: services,
@@ -565,7 +977,7 @@ pub fn run(services: Arc<crate::AirDropdServices>) -> iced::Result {
             resizable: true,
             decorations: true,
             transparent: false,
-            icon: None,
+            icon: window_icon,
             ..Default::default()
         },
         default_font: iced::Font::DEFAULT,
@@ -582,6 +994,8 @@ pub async fn run_app(
     std::env::set_var("WGPU_BACKEND", "dx12");
     std::env::set_var("WGPU_VALIDATION", "0");
 
+    let window_icon = assets::load_window_icon();
+
     AirDropdApp::run(Settings {
         flags: _services,
         id: None,
@@ -593,7 +1007,7 @@ pub async fn run_app(
             resizable: true,
             decorations: true,
             transparent: false,
-            icon: None,
+            icon: window_icon,
             ..Default::default()
         },
         antialiasing: true,

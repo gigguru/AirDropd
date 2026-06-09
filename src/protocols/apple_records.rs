@@ -52,6 +52,14 @@ impl AppleRecords {
 
     /// Create complete AirDrop TXT records compatible with Apple devices
     pub fn create_airdrop_txt_records() -> Result<HashMap<String, String>> {
+        Self::create_airdrop_txt_records_with_name(
+            &hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "AirDropd".to_string()),
+        )
+    }
+
+    pub fn create_airdrop_txt_records_with_name(display_name: &str) -> Result<HashMap<String, String>> {
         let mut properties = HashMap::new();
         
         // Core AirDrop properties - using Apple compatible flags
@@ -70,8 +78,7 @@ impl AppleRecords {
         
         // Device info
         properties.insert("model".to_string(), "Windows,1".to_string());
-        properties.insert("name".to_string(), 
-            hostname::get()?.to_string_lossy().to_string());
+        properties.insert("name".to_string(), display_name.to_string());
         properties.insert("system_version".to_string(), "10.0".to_string());
         
         // Capabilities
@@ -109,6 +116,14 @@ impl AppleRecords {
 
     /// Create Companion Link TXT records (for device pairing)
     pub fn create_companion_txt_records() -> Result<HashMap<String, String>> {
+        Self::create_companion_txt_records_with_name(
+            &hostname::get()
+                .map(|h| h.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "AirDropd".to_string()),
+        )
+    }
+
+    pub fn create_companion_txt_records_with_name(display_name: &str) -> Result<HashMap<String, String>> {
         let mut properties = HashMap::new();
         
         properties.insert("rpMRtID".to_string(), Self::generate_computer_id());
@@ -118,8 +133,7 @@ impl AppleRecords {
         properties.insert("rpHA".to_string(), Self::generate_device_hash());
         properties.insert("rpHI".to_string(), Self::generate_computer_id());
         properties.insert("rpMd".to_string(), "Windows,1".to_string());
-        properties.insert("rpNm".to_string(), 
-            hostname::get()?.to_string_lossy().to_string());
+        properties.insert("rpNm".to_string(), display_name.to_string());
         
         Ok(properties)
     }

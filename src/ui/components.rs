@@ -4,14 +4,13 @@
 //! un'interfaccia utente coerente e moderna.
 
 pub mod error_dialog;
-pub use error_dialog::{ErrorDialog, from_error};
 
 use iced::{
     widget::{
         button, column, container, progress_bar, row, text, Button, Column, Container, ProgressBar,
         Row, Text, Space,
     },
-    Alignment, Background, Border, Element, Length, Theme,
+    Alignment, Background, Element, Length, Theme,
 };
 
 use super::{styles, Message};
@@ -506,10 +505,22 @@ pub fn loading_state(message: &str) -> Element<Message> {
 /// Centered copyright footer for the application window
 pub fn copyright_footer(theme: &crate::ui::Theme) -> Element<'static, Message> {
     container(
-        text("© 2026 Rhythmic Records")
-            .size(10)
-            .style(styles::text_color_muted(*theme))
-            .horizontal_alignment(iced::alignment::Horizontal::Center),
+        row![
+            button(
+                text("About")
+                    .size(10)
+                    .style(styles::text_color_muted(*theme))
+            )
+            .on_press(Message::ShowAbout)
+            .style(iced::theme::Button::Text)
+            .padding([0, 4]),
+            text("© 2026 Rhythmic Records")
+                .size(10)
+                .style(styles::text_color_muted(*theme))
+                .horizontal_alignment(iced::alignment::Horizontal::Center),
+        ]
+        .align_items(Alignment::Center)
+        .spacing(8),
     )
     .width(Length::Fill)
     .padding([4, 0, 2, 0])

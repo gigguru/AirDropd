@@ -208,24 +208,45 @@ impl BleManager {
         Ok(())
     }
 
-    pub async fn start_advertising(&self) -> Result<()> {
+    pub async fn start_advertising_with_name(&self, device_name: &str) -> Result<()> {
         let mut is_advertising = self.is_advertising.lock().await;
         if *is_advertising {
-            return Ok(());
+            crate::network::ble_advertise::stop();
+            *is_advertising = false;
+        }
+        drop(is_advertising);
+
+        info!(
+            "Starting BLE advertising for AirDrop discovery as \"{}\"...",
+            device_name
+        );
+
+        if let Err(e) = crate::network::ble_advertise::start(device_name) {
+            warn!(
+                "BLE advertising failed: {} — iPhones may not discover this PC via AirDrop",
+                e
+            );
         }
 
+        *self.is_advertising.lock().await = true;
+        Ok(())
+    }
+
+    pub async fn start_advertising(&self) -> Result<()> {
         let device_name = hostname::get()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "AirDropd".to_string());
+        self.start_advertising_with_name(&device_name).await
+    }
 
-        info!("Starting BLE advertising for AirDrop discovery as \"{}\"...", device_name);
-
-        if let Err(e) = crate::network::ble_advertise::start(&device_name) {
-            warn!("BLE advertising failed: {} — iPhones may not discover this PC via AirDrop", e);
+    pub async fn restart_advertising(&self, device_name: &str) -> Result<()> {
+        let mut is_advertising = self.is_advertising.lock().await;
+        if *is_advertising {
+            crate::network::ble_advertise::stop();
+            *is_advertising = false;
         }
-
-        *is_advertising = true;
-        Ok(())
+        drop(is_advertising);
+        self.start_advertising_with_name(device_name).await
     }
 
     pub async fn stop_advertising(&self) -> Result<()> {

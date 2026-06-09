@@ -1,0 +1,18 @@
+Welcome to AirDropd Setup
+
+AirDropd brings Apple-style AirDrop and AirPlay compatibility to Windows 10 and later, so you can discover, send, and receive files with nearby Apple devices and other Windows computers running AirDropd.
+
+Features included in this release:
+
+  • AirDrop discovery — Find nearby iPhones, iPads, Macs, and other AirDropd PCs on your network
+  • Send files — Pick a device and share files using the built-in file picker
+  • Receive files — Incoming transfers are saved to your Downloads folder in an AirDropd subfolder
+  • Custom broadcast name — Choose the name shown to nearby devices
+  • Custom download location — Set where received files are stored
+  • System tray support — Minimize AirDropd to the notification area for a clean desktop experience
+  • BLE and mDNS advertising — Helps Apple devices discover your Windows PC
+  • Portable executable — Single AirDropd.exe with no extra DLLs required
+
+Before you continue, please review the license agreement on the next screen.
+
+Click Next to proceed.

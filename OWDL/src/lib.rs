@@ -1,4 +1,5 @@
 //! Open Wireless Direct Link (OWDL)
+#![allow(non_snake_case, dead_code)]
 //!
 //! Rust AWDL protocol implementation for AirDropd. Uses infrastructure-mode
 //! UDP transport on Windows (compatible with same-LAN Apple devices) and can

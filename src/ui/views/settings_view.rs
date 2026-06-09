@@ -16,6 +16,8 @@ use crate::ui::{
     styles,
     Theme,
 };
+use crate::config::AppConfig;
+use std::path::PathBuf;
 
 // Scelte statiche per i controlli `pick_list` per evitare riferimenti a temporanei
 const AIRDROP_VISIBILITIES: [AirDropVisibility; 3] = [
@@ -45,6 +47,10 @@ const EMPTY_INTERFACES: [&str; 0] = [];
 /// Struttura per la vista delle impostazioni
 #[derive(Debug, Clone)]
 pub struct SettingsView {
+    // User-facing settings
+    broadcast_name: String,
+    download_dir_text: String,
+
     // Impostazioni generali
     auto_discovery: bool,
     discovery_interval: u32,
@@ -132,8 +138,57 @@ impl std::fmt::Display for LogLevel {
 }
 
 impl SettingsView {
+    pub fn from_config(cfg: &AppConfig) -> Self {
+        Self::new(
+            cfg.broadcast_name.clone(),
+            cfg.download_dir.display().to_string(),
+            true,
+            15,
+            true,
+            cfg.minimize_to_tray,
+            true,
+            AirDropVisibility::Everyone,
+            false,
+            true,
+            AirPlayQuality::Auto,
+            false,
+            None,
+            Vec::new(),
+            None,
+            false,
+            LogLevel::Info,
+            2,
+        )
+    }
+
+    pub fn apply_to_config(&self, cfg: &mut AppConfig) {
+        cfg.broadcast_name = self.broadcast_name.trim().to_string();
+        if cfg.broadcast_name.is_empty() {
+            cfg.broadcast_name = crate::config::default_broadcast_name();
+        }
+        cfg.download_dir = PathBuf::from(self.download_dir_text.trim());
+        if cfg.download_dir.as_os_str().is_empty() {
+            cfg.download_dir = crate::config::default_download_dir();
+        }
+        cfg.minimize_to_tray = self.minimize_to_tray;
+    }
+
+    pub fn set_broadcast_name(&mut self, name: String) {
+        self.broadcast_name = name;
+    }
+
+    pub fn set_download_dir_text(&mut self, path: String) {
+        self.download_dir_text = path;
+    }
+
+    pub fn set_minimize_to_tray(&mut self, value: bool) {
+        self.minimize_to_tray = value;
+    }
+
     /// Crea una nuova istanza della vista impostazioni
     pub fn new(
+        broadcast_name: String,
+        download_dir_text: String,
         auto_discovery: bool,
         discovery_interval: u32,
         show_notifications: bool,
@@ -152,6 +207,8 @@ impl SettingsView {
         max_concurrent_transfers: u32,
     ) -> Self {
         Self {
+            broadcast_name,
+            download_dir_text,
             auto_discovery,
             discovery_interval,
             show_notifications,
@@ -246,19 +303,17 @@ impl SettingsView {
             Space::with_width(Length::Fill),
             
             button(
-                text("💾 Save")
+                text("Save")
                     .size(14)
             )
-            // Placeholder azione salvataggio
-            .on_press(Message::Tick)
+            .on_press(Message::SaveSettings)
             .style(iced::theme::Button::Primary),
             
             button(
-                text("🔄 Reset")
+                text("Reset")
                     .size(14)
             )
-            // Placeholder azione reset
-            .on_press(Message::Tick)
+            .on_press(Message::ResetSettings)
             .style(iced::theme::Button::Secondary),
         ]
         .align_items(Alignment::Center)
@@ -313,6 +368,45 @@ impl SettingsView {
 
         let settings = column![
             row![
+                text("Broadcast name:")
+                    .size(14)
+                    .width(Length::FillPortion(1)),
+                text_input("Computer name", &self.broadcast_name)
+                    .on_input(Message::BroadcastNameChanged)
+                    .width(Length::FillPortion(2))
+                    .padding(6),
+            ]
+            .align_items(Alignment::Center)
+            .spacing(styles::spacing::MEDIUM),
+
+            row![
+                text("Download folder:")
+                    .size(14)
+                    .width(Length::FillPortion(1)),
+                text_input("Downloads", &self.download_dir_text)
+                    .on_input(Message::DownloadDirChanged)
+                    .width(Length::FillPortion(2))
+                    .padding(6),
+                button(text("Browse").size(13))
+                    .on_press(Message::BrowseDownloadDir)
+                    .padding([6, 12]),
+            ]
+            .align_items(Alignment::Center)
+            .spacing(styles::spacing::MEDIUM),
+
+            text("Received files are saved in an AirDropd subfolder inside this location.")
+                .size(12),
+
+            checkbox(
+                "Minimize to system tray",
+                self.minimize_to_tray
+            )
+            .on_toggle(Message::MinimizeToTrayChanged),
+
+            horizontal_rule(1),
+            Space::with_height(styles::spacing::SMALL),
+
+            row![
                 checkbox(
                     "Automatic device discovery",
                     self.auto_discovery
@@ -339,12 +433,6 @@ impl SettingsView {
             checkbox(
                 "Show notifications",
                 self.show_notifications
-            )
-            .on_toggle(|_| Message::Tick),
-            
-            checkbox(
-                "Minimize to system tray",
-                self.minimize_to_tray
             )
             .on_toggle(|_| Message::Tick),
         ]

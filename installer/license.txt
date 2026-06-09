@@ -1,0 +1,39 @@
+AIRDROPD END-USER LICENSE AGREEMENT
+
+Copyright (c) 2026 Rhythmic Records. All rights reserved.
+
+IMPORTANT — READ CAREFULLY BEFORE INSTALLING OR USING AIRDROPD.
+
+By installing, copying, or using AirDropd ("the Software"), you agree to the terms of this agreement. If you do not agree, do not install or use the Software.
+
+1. LICENSE GRANT
+Rhythmic Records grants you a non-exclusive, non-transferable license to install and use AirDropd on computers you own or control, for personal or internal business purposes.
+
+2. RESTRICTIONS
+You may not reverse engineer, decompile, or disassemble the Software except where permitted by applicable law. You may not redistribute, sublicense, rent, lease, or sell the Software without written permission from Rhythmic Records.
+
+3. APPLE AND THIRD-PARTY SERVICES
+AirDropd provides compatibility features related to Apple AirDrop, AirPlay, and nearby device discovery. Apple product names and services are trademarks of Apple Inc. AirDropd is not affiliated with, endorsed by, or sponsored by Apple Inc. or Microsoft Corporation. Third-party hardware, network, Bluetooth, and firewall configuration may affect functionality.
+
+4. NO WARRANTY
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. RHYTHMIC RECORDS DOES NOT WARRANT THAT THE SOFTWARE WILL BE UNINTERRUPTED, ERROR-FREE, OR COMPATIBLE WITH ALL DEVICES OR NETWORKS.
+
+5. LIMITATION OF LIABILITY
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL RHYTHMIC RECORDS, ITS OWNERS, EMPLOYEES, CONTRACTORS, OR AFFILIATES BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR ANY LOSS OF DATA, FILES, PROFITS, OR BUSINESS OPPORTUNITIES, ARISING OUT OF OR RELATED TO YOUR USE OF OR INABILITY TO USE THE SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+6. USER RESPONSIBILITY
+You are solely responsible for:
+  • Files you send, receive, or store using AirDropd
+  • Network and device security on your computer
+  • Compliance with applicable laws when sharing content
+  • Backing up important data
+
+BY USING AIRDROPD, YOU ACKNOWLEDGE THAT YOU WILL NOT HOLD RHYTHMIC RECORDS RESPONSIBLE OR LIABLE FOR ANY DAMAGE, DATA LOSS, SECURITY INCIDENT, MISDIRECTED FILE TRANSFER, DEVICE INCOMPATIBILITY, NETWORK FAILURE, OR OTHER HARM ARISING FROM YOUR USE OF THE SOFTWARE.
+
+7. TERMINATION
+This license is effective until terminated. It terminates automatically if you fail to comply with these terms. Upon termination, you must uninstall and destroy all copies of the Software.
+
+8. GOVERNING LAW
+This agreement is governed by the laws applicable in the jurisdiction of Rhythmic Records, without regard to conflict-of-law principles.
+
+If you accept these terms, click "I accept the agreement" to continue installation.

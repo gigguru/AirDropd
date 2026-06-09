@@ -1,7 +1,7 @@
 //! Safe big-endian read/write helpers for AWDL frames.
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read};
 
 pub struct WireWriter {
     buf: Vec<u8>,
