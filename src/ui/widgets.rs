@@ -5,7 +5,7 @@
 
 use iced::{
     widget::{
-        button, column, container, row, text, Space, progress_bar,
+        button, column, container, mouse_area, row, text, Space, progress_bar,
         horizontal_rule, vertical_rule,
     },
     Alignment, Element, Length, Background, Color, Border, Shadow, Pixels,
@@ -457,6 +457,102 @@ pub fn device_bubble<'a>(
     .on_press(message)
     .style(iced::theme::Button::Text)
     .padding(0)
+    .width(Length::Fixed(90.0))
+    .height(Length::Fixed(96.0))
+    .into()
+}
+
+/// Full-width tappable device row (reliable click targets on Windows).
+pub fn device_list_row<'a>(
+    device_name: &str,
+    device_icon: &str,
+    subtitle: &str,
+    is_selected: bool,
+    theme: &IcedTheme,
+    message: Message,
+) -> Element<'a, Message> {
+    let is_dark = theme == &IcedTheme::Dark;
+    let row_bg = if is_selected {
+        Color::from_rgba(0.0, 0.48, 1.0, if is_dark { 0.22 } else { 0.12 })
+    } else if is_dark {
+        styles::colors::SURFACE
+    } else {
+        Color::from_rgb(0.94, 0.94, 0.96)
+    };
+    let border_color = if is_selected {
+        styles::colors::PRIMARY
+    } else if is_dark {
+        Color::from_rgba(1.0, 1.0, 1.0, 0.10)
+    } else {
+        Color::from_rgba(0.0, 0.0, 0.0, 0.08)
+    };
+    let name_color = if is_dark {
+        styles::colors::TEXT_PRIMARY
+    } else {
+        styles::colors::TEXT_PRIMARY_LIGHT
+    };
+    let subtitle_color = if is_dark {
+        styles::colors::TEXT_MUTED
+    } else {
+        styles::colors::TEXT_MUTED_LIGHT
+    };
+
+    let content = container(
+        row![
+            container(text(device_icon).size(24))
+                .width(Length::Fixed(44.0))
+                .height(Length::Fixed(44.0))
+                .center_x()
+                .center_y()
+                .style(move |_: &IcedTheme| container::Appearance {
+                    background: Some(Background::Color(if is_dark {
+                        styles::colors::SURFACE_VARIANT
+                    } else {
+                        Color::from_rgb(0.88, 0.88, 0.90)
+                    })),
+                    border: Border {
+                        radius: 22.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            column![
+                text(device_name)
+                    .size(14)
+                    .style(name_color),
+                text(subtitle)
+                    .size(11)
+                    .style(subtitle_color),
+            ]
+            .spacing(2)
+            .width(Length::Fill),
+            text("›")
+                .size(18)
+                .style(subtitle_color),
+        ]
+        .align_items(Alignment::Center)
+        .spacing(12)
+        .width(Length::Fill),
+    )
+    .padding([10, 14])
+    .width(Length::Fill)
+    .style(move |_: &IcedTheme| container::Appearance {
+        background: Some(Background::Color(row_bg)),
+        border: Border {
+            radius: 10.0.into(),
+            width: if is_selected { 1.5 } else { 1.0 },
+            color: border_color,
+        },
+        ..Default::default()
+    });
+
+    mouse_area(
+        button(content)
+            .on_press(message)
+            .style(iced::theme::Button::Text)
+            .width(Length::Fill)
+            .padding(0),
+    )
     .into()
 }
 

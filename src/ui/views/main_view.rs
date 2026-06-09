@@ -207,7 +207,11 @@ impl<'a> MainView<'a> {
 
         let body = column![
             self.toolbar(theme),
-            self.discovery_center(&iced_theme, theme),
+            container(self.discovery_center(&iced_theme, theme))
+                .width(Length::Fill)
+                .height(Length::FillPortion(1))
+                .align_y(iced::alignment::Vertical::Top)
+                .padding([0, 4]),
             if self.selected_device.is_some() {
                 self.action_sheet(theme)
             } else {
@@ -246,7 +250,7 @@ impl<'a> MainView<'a> {
         }
     }
 
-    /// Center discovery zone: radar rings with device bubbles directly beneath (macOS AirDrop layout).
+    /// Center discovery zone: radar rings with a tappable device list beneath.
     fn discovery_center(
         &self,
         iced_theme: &IcedTheme,
@@ -258,30 +262,27 @@ impl<'a> MainView<'a> {
             "No devices found — open AirDrop on your iPhone or Mac".to_string()
         } else {
             format!(
-                "{} device{} nearby — tap to share",
+                "{} device{} nearby — select one below",
                 self.discovered_devices.len(),
                 if self.discovered_devices.len() == 1 { "" } else { "s" }
             )
         };
 
-        container(
-            column![
-                widgets::airdrop_radar(iced_theme, self.is_scanning, self.sonar_tick),
-                Space::with_height(12),
-                self.device_orbit(iced_theme),
-                Space::with_height(8),
-                text(status_text)
-                    .size(13)
-                    .style(styles::text_color_muted(*theme))
-                    .horizontal_alignment(iced::alignment::Horizontal::Center),
-            ]
-            .align_items(Alignment::Center)
-            .width(Length::Fill)
-        )
+        column![
+            text(status_text)
+                .size(13)
+                .style(styles::text_color_muted(*theme))
+                .horizontal_alignment(iced::alignment::Horizontal::Center),
+            Space::with_height(8),
+            container(widgets::airdrop_radar(iced_theme, self.is_scanning, self.sonar_tick))
+                .height(Length::Fixed(200.0))
+                .center_x(),
+            Space::with_height(12),
+            self.device_list(iced_theme),
+        ]
+        .align_items(Alignment::Center)
         .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x()
-        .center_y()
+        .spacing(0)
         .into()
     }
 
@@ -357,7 +358,73 @@ impl<'a> MainView<'a> {
         .into()
     }
 
-    /// Devices arranged in a row beneath the sonar (AirDrop-capable first).
+    /// Scrollable list of nearby devices with full-width tap targets.
+    fn device_list(&self, iced_theme: &IcedTheme) -> Element<'a, Message> {
+        if self.discovered_devices.is_empty() {
+            return container(
+                text(if self.is_scanning {
+                    "Searching for nearby Apple devices..."
+                } else {
+                    " "
+                })
+                .size(12)
+                .style(styles::colors::TEXT_MUTED)
+                .horizontal_alignment(iced::alignment::Horizontal::Center),
+            )
+            .height(Length::Fixed(80.0))
+            .width(Length::Fill)
+            .center_x()
+            .center_y()
+            .into();
+        }
+
+        let items: Element<'a, Message> = self
+            .discovered_devices
+            .iter()
+            .cloned()
+            .fold(column![].spacing(8).width(Length::Fill), |col, device| {
+                let is_selected = self
+                    .selected_device
+                    .as_ref()
+                    .map(|s| s.name == device.name && s.address == device.address)
+                    .unwrap_or(false);
+                let icon = widgets::device_icon(&device.service_type);
+                let ble_only = device.port == 0 || device.address.is_unspecified();
+                let subtitle = if ble_only {
+                    "Bluetooth only — join the same Wi‑Fi to send files"
+                } else {
+                    match device.service_type {
+                        crate::network::ServiceType::AirPlay | crate::network::ServiceType::Raop => {
+                            "AirPlay device — tap for options"
+                        }
+                        crate::network::ServiceType::AirDrop
+                        | crate::network::ServiceType::Companion => "Ready to receive files",
+                        _ => "Tap to select",
+                    }
+                };
+                let device_for_msg = device.clone();
+                col.push(widgets::device_list_row(
+                    &device.name,
+                    icon,
+                    subtitle,
+                    is_selected,
+                    iced_theme,
+                    Message::DeviceSelected(device_for_msg),
+                ))
+            })
+            .into();
+
+        scrollable(
+            container(items)
+                .width(Length::Fill)
+                .padding([0, 4]),
+        )
+        .height(Length::Fill)
+        .width(Length::Fill)
+        .into()
+    }
+
+    #[allow(dead_code)]
     fn device_orbit(&self, iced_theme: &IcedTheme) -> Element<'a, Message> {
         self.device_row(iced_theme)
     }

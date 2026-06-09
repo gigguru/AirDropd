@@ -1100,6 +1100,38 @@ impl AirDropdApp {
         }
 
         let mut devices: Vec<_> = by_key.into_values().collect();
+
+        // One row per device name — mDNS often reports AirPlay, RAOP, companion, etc. separately.
+        let mut best_by_name: HashMap<String, crate::network::DiscoveredDevice> = HashMap::new();
+        for device in devices {
+            let key = device.name.to_lowercase();
+            let rank = |d: &crate::network::DiscoveredDevice| {
+                let service = match d.service_type {
+                    crate::network::ServiceType::AirDrop => 0,
+                    crate::network::ServiceType::Companion => 1,
+                    crate::network::ServiceType::DeviceInfo => 2,
+                    crate::network::ServiceType::AirPlay => 3,
+                    crate::network::ServiceType::Raop => 4,
+                    _ => 5,
+                };
+                let reachable = if !d.address.is_unspecified() && d.port > 0 {
+                    0
+                } else {
+                    16
+                };
+                reachable + service
+            };
+            best_by_name
+                .entry(key)
+                .and_modify(|existing| {
+                    if rank(&device) < rank(existing) {
+                        *existing = device.clone();
+                    }
+                })
+                .or_insert(device);
+        }
+        devices = best_by_name.into_values().collect();
+
         devices.sort_by(|a, b| {
             let rank = |d: &crate::network::DiscoveredDevice| match d.service_type {
                 crate::network::ServiceType::AirDrop => 0,
