@@ -279,7 +279,19 @@ impl Application for AirDropdApp {
                             return Err("No file selected".to_string());
                         };
                         let path = handle.path().to_path_buf();
-                        let port = if device.port > 0 { device.port } else { 8770 };
+                        let port = match device.service_type {
+                            crate::network::ServiceType::AirDrop
+                            | crate::network::ServiceType::Companion => {
+                                if device.port > 0 { device.port } else { 8770 }
+                            }
+                            _ => if device.port > 0 { device.port } else { 8770 },
+                        };
+                        if device.address.is_unspecified() {
+                            return Err(format!(
+                                "{} is visible via Bluetooth only — wait for Wi‑Fi discovery or move closer on the same network.",
+                                device.name
+                            ));
+                        }
                         let addr = std::net::SocketAddr::new(device.address, port);
                         crate::protocols::airdrop_client::AirDropClient::send_file(addr, &path)
                             .await
@@ -842,6 +854,16 @@ impl AirDropdApp {
     async fn fetch_devices(
         services: Arc<crate::AirDropdServices>,
     ) -> Vec<crate::network::DiscoveredDevice> {
+        let (our_name, our_ip) = {
+            let cfg = services.config.read().ok();
+            let name = cfg
+                .as_ref()
+                .map(|c| c.broadcast_name.to_lowercase())
+                .unwrap_or_default();
+            let ip = crate::network::util::primary_ipv4().ok();
+            (name, ip)
+        };
+
         let mut by_key: HashMap<String, crate::network::DiscoveredDevice> = HashMap::new();
         let mut by_name: HashMap<String, String> = HashMap::new();
 
@@ -849,6 +871,14 @@ impl AirDropdApp {
             for device in devices {
                 if device.name.is_empty() {
                     continue;
+                }
+                if device.name.to_lowercase() == our_name {
+                    continue;
+                }
+                if let Some(ip) = our_ip {
+                    if device.address == std::net::IpAddr::V4(ip) {
+                        continue;
+                    }
                 }
                 let key = format!("{}:{}", device.address, device.port);
                 if device.port > 0 {
@@ -860,7 +890,7 @@ impl AirDropdApp {
 
         let ble_devices = services.ble.lock().await.get_discovered_devices().await;
         for ble in ble_devices {
-            if ble.name.is_empty() {
+            if ble.name.is_empty() || ble.name.to_lowercase() == our_name {
                 continue;
             }
             if by_name.contains_key(&ble.name.to_lowercase()) {
@@ -878,8 +908,22 @@ impl AirDropdApp {
 
         let awdl = services.awdl.lock().await;
         for peer in awdl.get_peers().await {
+            if peer.device_name.to_lowercase() == our_name {
+                continue;
+            }
             let ip = peer.ipv4.unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
-            let key = format!("awdl:{}", peer.mac_address.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+            if let Some(our) = our_ip {
+                if ip == our {
+                    continue;
+                }
+            }
+            let key = format!(
+                "awdl:{}",
+                peer.mac_address
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>()
+            );
             by_key.entry(key).or_insert(crate::network::DiscoveredDevice {
                 name: peer.device_name,
                 address: std::net::IpAddr::V4(ip),
@@ -890,7 +934,17 @@ impl AirDropdApp {
         }
 
         let mut devices: Vec<_> = by_key.into_values().collect();
-        devices.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        devices.sort_by(|a, b| {
+            let rank = |d: &crate::network::DiscoveredDevice| match d.service_type {
+                crate::network::ServiceType::AirDrop => 0,
+                crate::network::ServiceType::Companion => 1,
+                crate::network::ServiceType::DeviceInfo => 2,
+                _ => 3,
+            };
+            rank(a)
+                .cmp(&rank(b))
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
         devices
     }
 

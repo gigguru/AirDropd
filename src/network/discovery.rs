@@ -1,4 +1,4 @@
-use mdns_sd::ServiceEvent;
+use mdns_sd::{ServiceEvent, ServiceInfo};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use anyhow::Result;
@@ -135,6 +135,7 @@ impl DeviceDiscovery {
 			"_airplay._tcp.local.",
 			"_raop._tcp.local.",
 			"_airdrop._tcp.local.",
+			"_airdrop._udp.local.",
 			"_companion-link._tcp.local.",
 			"_device-info._tcp.local.",
 			"_apple-mobdev2._tcp.local.",
@@ -151,39 +152,28 @@ impl DeviceDiscovery {
 					tokio::spawn(async move {
 						while running.load(Ordering::SeqCst) {
 							match receiver.recv_async().await {
-								Ok(event) => {
-									if let ServiceEvent::ServiceResolved(info) = event {
-										let addresses = info.get_addresses();
-										if !addresses.is_empty() {
-											if let Some(addr) = addresses.iter().next() {
-												let mut devices = devices.lock().await;
-												let display_name = friendly_name(info.get_fullname());
-												let device = DiscoveredDevice {
-													name: display_name,
-													address: IpAddr::V4(*addr),
-													port: info.get_port(),
-													service_type: match service_type.as_str() {
-														"_airplay._tcp.local." => ServiceType::AirPlay,
-														"_raop._tcp.local." => ServiceType::Raop,
-														"_airdrop._tcp.local." => ServiceType::AirDrop,
-														"_companion-link._tcp.local." => ServiceType::Companion,
-														_ => ServiceType::DeviceInfo,
-													},
-													txt_records: info.get_properties().iter().map(|prop| {
-														(prop.key().to_string(), prop.val_str().to_string())
-													}).collect(),
-												};
-												let key = format!(
-													"{}:{}:{}",
-													info.get_fullname(),
-													addr,
-													info.get_port()
-												);
-												devices.insert(key, device);
-											}
+								Ok(event) => match event {
+									ServiceEvent::ServiceResolved(info) => {
+										if let Some(device) =
+											resolve_discovered_device(&service_type, &info)
+										{
+											let key = device_key(&info, &device.address);
+											devices.lock().await.insert(key, device);
 										}
 									}
-								}
+									ServiceEvent::ServiceRemoved(_, fullname) => {
+										let mut map = devices.lock().await;
+										map.retain(|_, d| {
+											!fullname.contains(&d.name)
+												&& !d
+													.txt_records
+													.get("name")
+													.map(|n| fullname.contains(n))
+													.unwrap_or(false)
+										});
+									}
+									_ => {}
+								},
 								Err(e) => {
 									error!("Error receiving mDNS event: {}", e);
 									break;
@@ -211,6 +201,74 @@ impl DeviceDiscovery {
 
 	pub async fn get_devices(&self) -> Result<Vec<DiscoveredDevice>> {
 		let devices = self.devices.lock().await;
-		Ok(devices.values().cloned().collect())
+		let our_host = hostname::get()
+			.ok()
+			.map(|h| h.to_string_lossy().to_lowercase())
+			.unwrap_or_default();
+
+		Ok(devices
+			.values()
+			.filter(|d| !is_local_device(d, &our_host))
+			.cloned()
+			.collect())
 	}
+}
+
+fn device_key(info: &ServiceInfo, addr: &IpAddr) -> String {
+	format!("{}:{}:{}", info.get_fullname(), addr, info.get_port())
+}
+
+fn resolve_discovered_device(
+	service_type: &str,
+	info: &ServiceInfo,
+) -> Option<DiscoveredDevice> {
+	let addresses = info.get_addresses();
+	let addr = addresses.iter().next()?;
+	let txt_records: HashMap<String, String> = info
+		.get_properties()
+		.iter()
+		.map(|prop| (prop.key().to_string(), prop.val_str().to_string()))
+		.collect();
+
+	let display_name = txt_records
+		.get("name")
+		.or_else(|| txt_records.get("rpNm"))
+		.cloned()
+		.filter(|n| !n.is_empty())
+		.unwrap_or_else(|| friendly_name(info.get_fullname()));
+
+	let service = match service_type {
+		"_airplay._tcp.local." => ServiceType::AirPlay,
+		"_raop._tcp.local." => ServiceType::Raop,
+		"_airdrop._tcp.local." | "_airdrop._udp.local." => ServiceType::AirDrop,
+		"_companion-link._tcp.local." => ServiceType::Companion,
+		"_device-info._tcp.local." => ServiceType::DeviceInfo,
+		"_apple-mobdev2._tcp.local." => ServiceType::IosMobile,
+		"_rdlink._tcp.local." => ServiceType::RemoteDevice,
+		_ => ServiceType::DeviceInfo,
+	};
+
+	Some(DiscoveredDevice {
+		name: display_name,
+		address: IpAddr::V4(*addr),
+		port: info.get_port(),
+		service_type: service,
+		txt_records,
+	})
+}
+
+fn is_local_device(device: &DiscoveredDevice, our_host: &str) -> bool {
+	if our_host.is_empty() {
+		return false;
+	}
+	let name_lc = device.name.to_lowercase();
+	if name_lc == our_host || name_lc.contains("airdropd") {
+		return true;
+	}
+	if let Ok(our_ip) = super::util::primary_ipv4() {
+		if device.address == IpAddr::V4(our_ip) {
+			return true;
+		}
+	}
+	false
 }

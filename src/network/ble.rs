@@ -121,13 +121,9 @@ impl BleManager {
 
         info!("Starting BLE scan for AirDrop devices...");
 
-        // Create scan filter for AirDrop services
-        let scan_filter = ScanFilter {
-            services: vec![
-                Uuid::parse_str(AIRDROP_SERVICE_UUID)?,
-                Uuid::parse_str(CONTINUITY_SERVICE_UUID)?,
-            ],
-        };
+        // Scan all peripherals; Apple AirDrop beacons use manufacturer data (0x004C)
+        // and often do not include service UUIDs in the advertisement packet.
+        let scan_filter = ScanFilter::default();
 
         adapter.start_scan(scan_filter).await?;
         *is_scanning = true;
@@ -150,14 +146,24 @@ impl BleManager {
                                 if let Some(props) = properties {
                                     let device_id = peripheral.id().to_string();
                                     
-                                    // Check if this looks like an AirDrop device
+                                    // Apple manufacturer payload: type 0x05 = AirDrop proximity beacon.
+                                    // btleplug stores data without the 0x004C company id prefix.
                                     let is_airdrop_device = props.manufacturer_data
-                                        .get(&0x004C) // Apple Company ID
-                                        .map(|data| data.len() >= 3 && data[2] == 0x05) // AirDrop type
+                                        .get(&0x004C)
+                                        .map(|data| {
+                                            data.first() == Some(&0x05)
+                                                || (data.len() >= 3 && data[2] == 0x05)
+                                        })
                                         .unwrap_or(false);
 
-                                    if is_airdrop_device || 
-                                       props.services.contains(&Uuid::parse_str(AIRDROP_SERVICE_UUID).unwrap()) {
+                                    let airdrop_uuid = Uuid::parse_str(AIRDROP_SERVICE_UUID).unwrap();
+                                    let continuity_uuid =
+                                        Uuid::parse_str(CONTINUITY_SERVICE_UUID).unwrap();
+
+                                    if is_airdrop_device
+                                        || props.services.contains(&airdrop_uuid)
+                                        || props.services.contains(&continuity_uuid)
+                                    {
                                         
                                         let local_name = props
                                         .local_name
