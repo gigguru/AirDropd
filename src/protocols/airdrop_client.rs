@@ -16,12 +16,8 @@ pub struct AirDropClient;
 impl AirDropClient {
     /// Probe whether a receiver responds to /Discover (OpenDrop-style).
     pub async fn probe_discover(target: SocketAddr) -> Result<Option<String>> {
-        let connector = Self::tls_connector()?;
-        let stream = TcpStream::connect(target).await?;
-        let mut tls = connector.connect("AirDrop", stream).await?;
-
         let body = encode_plist(&Dictionary::new())?;
-        let response = Self::post_plist(&mut tls, "/Discover", &body).await?;
+        let response = post_on_new_connection(target, "/Discover", &body, "application/octet-stream").await?;
         let value: Value = plist::from_bytes(&response).context("parse discover response")?;
         Ok(value
             .as_dictionary()
@@ -31,7 +27,7 @@ impl AirDropClient {
     }
 
     /// Send a file to an Apple device using the AirDrop HTTPS protocol.
-    pub async fn send_file(target: SocketAddr, file_path: &Path) -> Result<()> {
+    pub async fn send_file(target: SocketAddr, file_path: &Path, sender_id: &str) -> Result<()> {
         let hostname = hostname::get()?.to_string_lossy().to_string();
         let file_name = file_path
             .file_name()
@@ -40,22 +36,29 @@ impl AirDropClient {
             .to_string();
         let file_data = tokio::fs::read(file_path).await?;
 
-        let connector = Self::tls_connector()?;
-        let stream = TcpStream::connect(target).await?;
-        let mut tls = connector.connect("AirDrop", stream).await?;
-
         let mut discover = Dictionary::new();
-        discover.insert("SenderModelName".to_string(), Value::String(SENDER_MODEL.to_string()));
+        discover.insert(
+            "SenderModelName".to_string(),
+            Value::String(SENDER_MODEL.to_string()),
+        );
         discover.insert(
             "SenderComputerName".to_string(),
             Value::String(hostname.clone()),
         );
-        Self::post_plist(&mut tls, "/Discover", &encode_plist(&discover)?).await?;
+        post_on_new_connection(target, "/Discover", &encode_plist(&discover)?, "application/octet-stream")
+            .await?;
 
         let mut ask = Dictionary::new();
-        ask.insert("SenderModelName".to_string(), Value::String(SENDER_MODEL.to_string()));
+        ask.insert(
+            "SenderModelName".to_string(),
+            Value::String(SENDER_MODEL.to_string()),
+        );
         ask.insert("SenderComputerName".to_string(), Value::String(hostname));
-        ask.insert("BundleID".to_string(), Value::String("com.apple.finder".to_string()));
+        ask.insert(
+            "BundleID".to_string(),
+            Value::String("com.apple.finder".to_string()),
+        );
+        ask.insert("SenderID".to_string(), Value::String(sender_id.to_string()));
         ask.insert("ConvertMediaFormats".to_string(), Value::Boolean(false));
 
         let mut file_entry = Dictionary::new();
@@ -75,59 +78,95 @@ impl AirDropClient {
             Value::Array(vec![Value::Dictionary(file_entry)]),
         );
 
-        Self::post_plist(&mut tls, "/Ask", &encode_plist(&ask)?).await?;
+        post_on_new_connection(target, "/Ask", &encode_plist(&ask)?, "application/octet-stream").await?;
 
         let cpio_body = build_gzip_cpio(file_path, &file_data)?;
-        Self::post_raw(
-            &mut tls,
-            "/Upload",
-            &cpio_body,
-            "application/x-cpio",
-        )
-        .await?;
+        post_upload_chunked(target, &cpio_body).await?;
 
         Ok(())
     }
+}
 
-    fn tls_connector() -> Result<TlsConnector> {
-        let connector = native_tls::TlsConnector::builder()
-            .danger_accept_invalid_certs(true)
-            .build()?;
-        Ok(TlsConnector::from(connector))
-    }
+async fn post_on_new_connection(
+    target: SocketAddr,
+    path: &str,
+    body: &[u8],
+    content_type: &str,
+) -> Result<Vec<u8>> {
+    let connector = tls_connector()?;
+    let stream = TcpStream::connect(target).await?;
+    let mut tls = connector.connect("AirDrop", stream).await?;
+    post_raw(&mut tls, path, body, content_type).await
+}
 
-    async fn post_plist(
-        tls: &mut tokio_native_tls::TlsStream<TcpStream>,
-        path: &str,
-        body: &[u8],
-    ) -> Result<Vec<u8>> {
-        Self::post_raw(tls, path, body, "application/octet-stream").await
-    }
+async fn post_upload_chunked(target: SocketAddr, body: &[u8]) -> Result<()> {
+    let connector = tls_connector()?;
+    let stream = TcpStream::connect(target).await?;
+    let mut tls = connector.connect("AirDrop", stream).await?;
 
-    async fn post_raw(
-        tls: &mut tokio_native_tls::TlsStream<TcpStream>,
-        path: &str,
-        body: &[u8],
-        content_type: &str,
-    ) -> Result<Vec<u8>> {
-        let request = format!(
-            "POST {} HTTP/1.1\r\n\
-             Host: AirDrop\r\n\
-             Content-Type: {}\r\n\
-             Content-Length: {}\r\n\
-             Connection: keep-alive\r\n\
-             User-Agent: AirDrop/1.0\r\n\
-             Accept: */*\r\n\
-             \r\n",
-            path,
-            content_type,
-            body.len()
+    let request = "POST /Upload HTTP/1.1\r\n\
+                   Host: AirDrop\r\n\
+                   Content-Type: application/x-cpio\r\n\
+                   Transfer-Encoding: chunked\r\n\
+                   Expect: 100-continue\r\n\
+                   Connection: close\r\n\
+                   User-Agent: AirDrop/1.0\r\n\
+                   Accept: */*\r\n\
+                   \r\n";
+    tls.write_all(request.as_bytes()).await?;
+    tls.flush().await?;
+
+    let mut buf = [0u8; 256];
+    let n = tls.read(&mut buf).await.unwrap_or(0);
+    let continue_resp = String::from_utf8_lossy(&buf[..n]);
+    if !continue_resp.contains("100 Continue") && !continue_resp.is_empty() {
+        anyhow::bail!(
+            "Upload not accepted: {}",
+            continue_resp.lines().next().unwrap_or("unknown")
         );
-        tls.write_all(request.as_bytes()).await?;
-        tls.write_all(body).await?;
-        tls.flush().await?;
-        read_http_response(tls).await
     }
+
+    for chunk in body.chunks(8192) {
+        let header = format!("{:x}\r\n", chunk.len());
+        tls.write_all(header.as_bytes()).await?;
+        tls.write_all(chunk).await?;
+        tls.write_all(b"\r\n").await?;
+    }
+    tls.write_all(b"0\r\n\r\n").await?;
+    tls.flush().await?;
+
+    read_http_response(&mut tls).await?;
+    Ok(())
+}
+
+fn tls_connector() -> Result<TlsConnector> {
+    let connector = native_tls::TlsConnector::builder()
+        .danger_accept_invalid_certs(true)
+        .build()?;
+    Ok(TlsConnector::from(connector))
+}
+
+async fn post_raw(
+    tls: &mut tokio_native_tls::TlsStream<TcpStream>,
+    path: &str,
+    body: &[u8],
+    content_type: &str,
+) -> Result<Vec<u8>> {
+    let request = format!(
+        "POST {} HTTP/1.1\r\n\
+         Host: AirDrop\r\n\
+         Content-Type: {}\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         User-Agent: AirDrop/1.0\r\n\
+         Accept: */*\r\n\
+         \r\n",
+        path, content_type, body.len()
+    );
+    tls.write_all(request.as_bytes()).await?;
+    tls.write_all(body).await?;
+    tls.flush().await?;
+    read_http_response(tls).await
 }
 
 fn encode_plist(map: &Dictionary) -> Result<Vec<u8>> {
@@ -140,13 +179,15 @@ fn encode_plist(map: &Dictionary) -> Result<Vec<u8>> {
 
 fn guess_uti(path: &Path) -> String {
     let guessed = mime_guess::from_path(path).first_or_octet_stream();
-    let mime = guessed.essence_str();
-    match mime {
+    match guessed.essence_str() {
         "image/jpeg" => "public.jpeg".to_string(),
         "image/png" => "public.png".to_string(),
         "image/gif" => "com.compuserve.gif".to_string(),
+        "image/heic" => "public.heic".to_string(),
         "video/mp4" => "public.mpeg-4".to_string(),
+        "video/quicktime" => "com.apple.quicktime-movie".to_string(),
         "application/pdf" => "com.adobe.pdf".to_string(),
+        "text/plain" => "public.plain-text".to_string(),
         _ => "public.content".to_string(),
     }
 }

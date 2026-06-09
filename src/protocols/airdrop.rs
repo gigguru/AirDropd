@@ -113,7 +113,7 @@ impl AirDrop {
     }
 
     async fn register_mdns_services(&self) -> Result<()> {
-        let (broadcast_name, device_ph, service_id, discoverable) = {
+        let (broadcast_name, device_ph, device_id, service_id, discoverable, contacts_only) = {
             let cfg = self
                 .config
                 .read()
@@ -121,8 +121,10 @@ impl AirDrop {
             (
                 cfg.broadcast_name.clone(),
                 cfg.device_ph.clone(),
+                cfg.device_id.clone(),
                 cfg.service_id.clone(),
                 cfg.discoverable,
+                cfg.contacts_only,
             )
         };
 
@@ -137,26 +139,44 @@ impl AirDrop {
             &broadcast_name,
             &device_ph,
             discoverable,
+            contacts_only,
+        )?;
+        let companion_properties = AppleRecords::create_companion_txt_records_with_name(
+            &broadcast_name,
+            &device_id,
+            &device_ph,
         )?;
 
         let host_fqdn = format!("{}.local.", host);
         let ip = primary_ipv4()?.to_string();
 
-        let service = ServiceInfo::new(
-            "_airdrop._tcp.local.",
-            &instance,
-            &host_fqdn,
-            &ip,
-            8770,
-            Some(airdrop_properties),
-        )?;
+        let services = [
+            ServiceInfo::new(
+                "_airdrop._tcp.local.",
+                &instance,
+                &host_fqdn,
+                &ip,
+                8770,
+                Some(airdrop_properties),
+            )?,
+            ServiceInfo::new(
+                "_companion-link._tcp.local.",
+                &instance,
+                &host_fqdn,
+                &ip,
+                8770,
+                Some(companion_properties),
+            )?,
+        ];
 
         let mut registered = self.registered_services.lock().await;
-        let fullname = service.get_fullname().to_string();
-        self.mdns
-            .register(service)
-            .map_err(|e| anyhow!("Failed to register mDNS service {}: {}", fullname, e))?;
-        registered.push(fullname);
+        for service in services {
+            let fullname = service.get_fullname().to_string();
+            self.mdns
+                .register(service)
+                .map_err(|e| anyhow!("Failed to register mDNS service {}: {}", fullname, e))?;
+            registered.push(fullname);
+        }
 
         info!(
             "Registered _airdrop._tcp as \"{}\" ({}) on {}:8770",

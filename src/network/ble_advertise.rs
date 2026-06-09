@@ -16,11 +16,8 @@ mod imp {
 
     fn airdrop_manufacturer_payload(device_hash: [u8; 6]) -> Result<windows::Storage::Streams::IBuffer> {
         let writer = DataWriter::new()?;
-        // Apple company ID (little-endian on air)
-        writer.WriteByte(0x4C)?;
-        writer.WriteByte(0x00)?;
-        // AirDrop / Handoff proximity type
-        writer.WriteByte(0x05)?;
+        // Payload only — Windows prepends company ID 0x004C via Create().
+        writer.WriteByte(0x05)?; // AirDrop proximity type
         writer.WriteByte(0x01)?; // discoverable
         for byte in device_hash {
             writer.WriteByte(byte)?;

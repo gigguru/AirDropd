@@ -9,11 +9,17 @@ pub const RECEIVER_FLAGS_DISCOVERABLE: u32 = 0x08 | 0x80;
 /// Reduced visibility (no /Discover support advertised).
 pub const RECEIVER_FLAGS_HIDDEN: u32 = 0x02;
 
-pub fn receiver_flags(discoverable: bool) -> u32 {
-    if discoverable {
-        RECEIVER_FLAGS_DISCOVERABLE
-    } else {
+/// Everyone-visible without Apple-signed RecordData for true contacts-only.
+pub const RECEIVER_FLAGS_MIXED_ONLY: u32 = 0x08;
+
+pub fn receiver_flags(discoverable: bool, contacts_only: bool) -> u32 {
+    if !discoverable {
         RECEIVER_FLAGS_HIDDEN
+    } else if contacts_only {
+        // Contacts-only requires Apple-signed RecordData; advertise minimally.
+        RECEIVER_FLAGS_MIXED_ONLY
+    } else {
+        RECEIVER_FLAGS_DISCOVERABLE
     }
 }
 
@@ -22,7 +28,11 @@ fn media_capabilities_json() -> Vec<u8> {
     br#"{"Version":1}"#.to_vec()
 }
 
-pub fn build_discover_response(computer_name: &str, model: &str) -> Result<Vec<u8>> {
+pub fn build_discover_response(
+    computer_name: &str,
+    model: &str,
+    flags: u32,
+) -> Result<Vec<u8>> {
     let mut dict = Dictionary::new();
     dict.insert(
         "ReceiverMediaCapabilities".to_string(),
@@ -35,6 +45,10 @@ pub fn build_discover_response(computer_name: &str, model: &str) -> Result<Vec<u
     dict.insert(
         "ReceiverModelName".to_string(),
         Value::String(model.to_string()),
+    );
+    dict.insert(
+        "ReceiverFlags".to_string(),
+        Value::Integer(flags.into()),
     );
     encode_binary_plist(&dict)
 }

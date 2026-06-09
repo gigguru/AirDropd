@@ -17,11 +17,11 @@ impl AppleRecords {
     }
 
     /// OpenDrop-compatible minimal TXT: only `flags` (required for /Discover probing).
-    pub fn create_airdrop_txt_records(discoverable: bool) -> Result<HashMap<String, String>> {
+    pub fn create_airdrop_txt_records(discoverable: bool, contacts_only: bool) -> Result<HashMap<String, String>> {
         let mut properties = HashMap::new();
         properties.insert(
             "flags".to_string(),
-            apple_plist::receiver_flags(discoverable).to_string(),
+            apple_plist::receiver_flags(discoverable, contacts_only).to_string(),
         );
         Ok(properties)
     }
@@ -31,8 +31,9 @@ impl AppleRecords {
         display_name: &str,
         device_ph: &str,
         discoverable: bool,
+        contacts_only: bool,
     ) -> Result<HashMap<String, String>> {
-        let mut properties = Self::create_airdrop_txt_records(discoverable)?;
+        let mut properties = Self::create_airdrop_txt_records(discoverable, contacts_only)?;
         properties.insert("name".to_string(), display_name.to_string());
         properties.insert("model".to_string(), "Windows,1".to_string());
         properties.insert("ph".to_string(), device_ph.to_string());

@@ -113,20 +113,44 @@ impl AirDropHttpServer {
     ) -> Result<()> {
         debug!("Handling HTTPS connection from {}", addr);
         let mut tls_stream = acceptor.accept(stream).await?;
-        let request = read_http_request(&mut tls_stream).await?;
 
-        debug!("HTTP {} {}", request.method, request.path);
+        loop {
+            let request = match read_http_request(&mut tls_stream).await {
+                Ok(req) => req,
+                Err(e) => {
+                    debug!("Connection from {} ended: {}", addr, e);
+                    break;
+                }
+            };
 
-        match (request.method.as_str(), request.path.as_str()) {
-            ("GET", "/") | ("HEAD", "/") => write_empty_ok(&mut tls_stream).await?,
-            ("POST", "/Discover") => {
-                handle_discover(&mut tls_stream, &request, &config).await?
+            debug!("HTTP {} {}", request.method, request.path);
+
+            let close_connection = match (request.method.as_str(), request.path.as_str()) {
+                ("GET", "/") | ("HEAD", "/") => {
+                    write_response(&mut tls_stream, 200, &[], false).await?;
+                    false
+                }
+                ("POST", "/Discover") => {
+                    handle_discover(&mut tls_stream, &request, &config).await?;
+                    false
+                }
+                ("POST", "/Ask") => {
+                    handle_ask(&mut tls_stream, &request, &config).await?;
+                    false
+                }
+                ("POST", "/Upload") => {
+                    handle_upload(&mut tls_stream, &request, &config, received_tx.clone()).await?;
+                    true
+                }
+                _ => {
+                    write_response(&mut tls_stream, 404, &[], true).await?;
+                    true
+                }
+            };
+
+            if close_connection {
+                break;
             }
-            ("POST", "/Ask") => handle_ask(&mut tls_stream, &request, &config).await?,
-            ("POST", "/Upload") => {
-                handle_upload(&mut tls_stream, &request, &config, received_tx).await?
-            }
-            _ => write_response(&mut tls_stream, 404, &[]).await?,
         }
 
         Ok(())
@@ -154,13 +178,18 @@ async fn handle_discover(
         info!("AirDrop /Discover (empty body)");
     }
 
-    let broadcast_name = config
-        .read()
-        .map(|c| c.broadcast_name.clone())
-        .unwrap_or_else(|_| config::default_broadcast_name());
+    let (broadcast_name, flags) = {
+        let cfg = config
+            .read()
+            .map_err(|_| anyhow!("config lock poisoned"))?;
+        (
+            cfg.broadcast_name.clone(),
+            apple_plist::receiver_flags(cfg.discoverable, cfg.contacts_only),
+        )
+    };
 
-    let body = apple_plist::build_discover_response(&broadcast_name, RECEIVER_MODEL)?;
-    write_response(stream, 200, &body).await
+    let body = apple_plist::build_discover_response(&broadcast_name, RECEIVER_MODEL, flags)?;
+    write_response(stream, 200, &body, false).await
 }
 
 async fn handle_ask(
@@ -180,7 +209,7 @@ async fn handle_ask(
         .unwrap_or_else(|_| config::default_broadcast_name());
 
     let body = apple_plist::build_ask_response(&broadcast_name, RECEIVER_MODEL)?;
-    write_response(stream, 200, &body).await
+    write_response(stream, 200, &body, false).await
 }
 
 async fn handle_upload(
@@ -193,7 +222,7 @@ async fn handle_upload(
 
     let content_type = header_value(&request.headers, "content-type");
     if !content_type.is_empty() && !content_type.contains("application/x-cpio") {
-        write_response(stream, 406, &[]).await?;
+        write_response(stream, 406, &[], true).await?;
         return Ok(());
     }
 
@@ -224,7 +253,7 @@ async fn handle_upload(
         }
     }
 
-    write_response(stream, 200, &[]).await
+    write_response(stream, 200, &[], true).await
 }
 
 async fn read_fixed_body(
@@ -401,6 +430,7 @@ async fn write_response(
     stream: &mut RustlsTlsStream<TcpStream>,
     status: u16,
     body: &[u8],
+    close: bool,
 ) -> Result<()> {
     let reason = match status {
         200 => "OK",
@@ -408,11 +438,13 @@ async fn write_response(
         406 => "Not Acceptable",
         _ => "Error",
     };
+    let connection = if close { "close" } else { "keep-alive" };
     let response = format!(
-        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: {}\r\n\r\n",
         status,
         reason,
-        body.len()
+        body.len(),
+        connection
     );
     stream.write_all(response.as_bytes()).await?;
     if !body.is_empty() {
@@ -420,10 +452,6 @@ async fn write_response(
     }
     stream.flush().await?;
     Ok(())
-}
-
-async fn write_empty_ok(stream: &mut RustlsTlsStream<TcpStream>) -> Result<()> {
-    write_response(stream, 200, &[]).await
 }
 
 fn header_value(headers: &HashMap<String, String>, key: &str) -> String {

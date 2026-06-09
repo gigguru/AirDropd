@@ -28,6 +28,9 @@ pub struct AppConfig {
     /// Whether this PC advertises itself for incoming AirDrop transfers.
     #[serde(default = "default_discoverable")]
     pub discoverable: bool,
+    /// Contacts-only visibility (requires Apple-signed identity for full compatibility).
+    #[serde(default)]
+    pub contacts_only: bool,
     /// User already added Windows Firewall exceptions (skip future prompts).
     #[serde(default)]
     pub firewall_exceptions_added: bool,
@@ -50,6 +53,7 @@ impl Default for AppConfig {
             device_id: Self::generate_device_id(),
             service_id: Self::generate_service_id(),
             discoverable: true,
+            contacts_only: false,
             firewall_exceptions_added: false,
             firewall_prompt_dismissed: false,
         }

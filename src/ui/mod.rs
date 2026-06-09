@@ -341,6 +341,12 @@ impl Application for AirDropdApp {
 
             Message::SendFile(device) => {
                 let device = device.clone();
+                let service_id = self
+                    .services
+                    .config
+                    .read()
+                    .map(|c| c.service_id.clone())
+                    .unwrap_or_default();
                 Command::perform(
                     async move {
                         use rfd::AsyncFileDialog;
@@ -363,9 +369,13 @@ impl Application for AirDropdApp {
                             ));
                         }
                         let addr = std::net::SocketAddr::new(device.address, port);
-                        crate::protocols::airdrop_client::AirDropClient::send_file(addr, &path)
-                            .await
-                            .map_err(|e| e.to_string())?;
+                        crate::protocols::airdrop_client::AirDropClient::send_file(
+                            addr,
+                            &path,
+                            &service_id,
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
                         Ok::<(), String>(())
                     },
                     |res| match res {
@@ -494,12 +504,15 @@ impl Application for AirDropdApp {
                     async move {
                         let discoverable =
                             visibility != views::settings_view::AirDropVisibility::ReceivingOff;
+                        let contacts_only =
+                            visibility == views::settings_view::AirDropVisibility::ContactsOnly;
                         {
                             let mut cfg = services
                                 .config
                                 .write()
                                 .map_err(|_| "config lock poisoned".to_string())?;
                             cfg.discoverable = discoverable;
+                            cfg.contacts_only = contacts_only;
                             cfg.save().map_err(|e| e.to_string())?;
                         }
                         services.apply_settings().await.map_err(|e| e.to_string())
@@ -989,33 +1002,6 @@ impl AirDropdApp {
                 name: ble.name,
                 address: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
                 port: 0,
-                service_type: crate::network::ServiceType::AirDrop,
-                txt_records: HashMap::new(),
-            });
-        }
-
-        let awdl = services.awdl.lock().await;
-        for peer in awdl.get_peers().await {
-            if peer.device_name.to_lowercase() == our_name {
-                continue;
-            }
-            let ip = peer.ipv4.unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
-            if let Some(our) = our_ip {
-                if ip == our {
-                    continue;
-                }
-            }
-            let key = format!(
-                "awdl:{}",
-                peer.mac_address
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<String>()
-            );
-            by_key.entry(key).or_insert(crate::network::DiscoveredDevice {
-                name: peer.device_name,
-                address: std::net::IpAddr::V4(ip),
-                port: 8770,
                 service_type: crate::network::ServiceType::AirDrop,
                 txt_records: HashMap::new(),
             });
