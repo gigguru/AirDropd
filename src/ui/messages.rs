@@ -1,16 +1,16 @@
-//! Definizione dei messaggi per l'architettura Iced
-//! 
-//! Questo modulo contiene tutti i messaggi che possono essere inviati
-//! nell'applicazione per gestire gli eventi e le azioni dell'utente.
+//! Message definitions for the Iced application architecture.
+//!
+//! This module contains every message the application can send while
+//! handling system events and user actions.
 
 use crate::network::DiscoveredDevice;
 use crate::protocols::airdrop::AirDropStatus;
 use std::path::PathBuf;
 
-/// Messaggi principali dell'applicazione
+/// Main application messages.
 #[derive(Debug, Clone)]
 pub enum Message {
-    // Messaggi di sistema
+    // System messages
     Tick,
     ThemeChanged(crate::ui::Theme),
     InitializationComplete,
@@ -20,7 +20,7 @@ pub enum Message {
     CheckFirewall,
     FirewallPromptComplete(crate::network::firewall::FirewallPromptResult),
     
-    // Messaggi di discovery
+    // Discovery messages
     StartScanning,
     StopScanning,
     DevicesUpdated(Vec<DiscoveredDevice>),
@@ -29,7 +29,7 @@ pub enum Message {
     DeviceSelected(DiscoveredDevice),
     DeviceDeselected,
     
-    // Messaggi di AirDrop
+    // AirDrop messages
     AirDropStatusChanged(AirDropStatus),
     SendFile(DiscoveredDevice),
     SendFolder(DiscoveredDevice),
@@ -45,25 +45,25 @@ pub enum Message {
     ChooseRecipientWithFiles(DiscoveredDevice, Vec<PathBuf>),
     CancelRecipientChooser,
     
-    // Messaggi di interfaccia
+    // Interface messages
     ShowLinkDialog,
     HideLinkDialog,
     LinkInputChanged(String),
     
-    // Messaggi di notifica
+    // Notification messages
     ShowNotification(NotificationMessage),
     HideNotification,
     
-    // Messaggi di errore
+    // Error and info messages
     Error(String),
     Info(String),
     
-    // Messaggi per le impostazioni
+    // Settings messages
     OpenLogFolder,
     ClearCache,
     RunDiagnostics,
     
-    // Messaggi per la navigazione
+    // Navigation messages
     ShowMainView,
     ShowSettings,
     ShowAbout,
@@ -97,7 +97,7 @@ pub enum Message {
     // Discovery visibility (macOS AirDrop-style)
     VisibilityChanged(crate::ui::views::settings_view::AirDropVisibility),
     
-    // Messaggi per i link esterni
+    // External link messages
     OpenLicenses,
     OpenWebsite,
     OpenDocumentation,
@@ -105,7 +105,7 @@ pub enum Message {
     OpenFeatureRequest,
 }
 
-/// Tipi di notifiche
+/// Notification message payload.
 #[derive(Debug, Clone)]
 pub struct NotificationMessage {
     pub title: String,
@@ -160,7 +160,7 @@ impl NotificationMessage {
     }
 }
 
-/// Subscription messages per eventi asincroni
+/// Subscription messages for asynchronous events.
 #[derive(Debug, Clone)]
 pub enum SubscriptionMessage {
     DeviceDiscoveryUpdate(Vec<DiscoveredDevice>),

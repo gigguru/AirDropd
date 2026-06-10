@@ -1,7 +1,7 @@
-//! Modulo delle viste dell'interfaccia utente
+//! User-interface view modules.
 //!
-//! Questo modulo contiene le diverse viste dell'applicazione AirDropd,
-//! organizzate in moduli separati per una migliore manutenibilità.
+//! This module contains the different AirDropd application views, organized
+//! into separate modules for better maintainability.
 
 pub mod main_view;
 pub mod settings_view;

@@ -1,7 +1,6 @@
-//! Vista About dell'applicazione AirDropd
+//! About view for the AirDropd application.
 //!
-//! Questa vista mostra informazioni sull'applicazione, crediti,
-//! licenze e collegamenti utili.
+//! This view shows application information, credits, licenses, and useful links.
 
 use iced::{
     widget::{
@@ -18,7 +17,7 @@ use crate::ui::{
     styles,
 };
  
-/// Struttura per la vista About
+/// About view state.
 #[derive(Debug, Clone)]
 pub struct AboutView {
     app_version: String,
@@ -27,7 +26,7 @@ pub struct AboutView {
 } 
  
 impl AboutView {
-    /// Crea una nuova istanza della vista About
+    /// Create a new About view instance.
     pub fn new(
         app_version: String, 
         build_date: String,
@@ -40,7 +39,7 @@ impl AboutView {
         }
     }
 
-    /// Renderizza la vista About
+    /// Render the About view.
     pub fn view(&self, theme: &Theme) -> Element<Message> {
         let header = row![
             button(
@@ -61,37 +60,37 @@ impl AboutView {
 
         let content = scrollable(
             column![
-                // Logo e titolo principale
+                // Logo and main title
                 self.app_header(theme),
                 
                 Space::with_height(styles::spacing::LARGE),
                 
-                // Informazioni versione
+                // Version information
                 self.version_info(theme),
                 
                 Space::with_height(styles::spacing::LARGE),
                 
-                // Descrizione
+                // Description
                 self.description(theme),
                 
                 Space::with_height(styles::spacing::LARGE),
                 
-                // Funzionalità
+                // Features
                 self.features(theme),
                 
                 Space::with_height(styles::spacing::LARGE),
                 
-                // Crediti
+                // Credits
                 self.credits(theme),
                 
                 Space::with_height(styles::spacing::LARGE),
                 
-                // Licenze
+                // Licenses
                 self.licenses(theme),
                 
                 Space::with_height(styles::spacing::LARGE),
                 
-                // Collegamenti
+                // Links
                 self.links(theme),
                 
                 Space::with_height(styles::spacing::XLARGE),
@@ -113,23 +112,23 @@ impl AboutView {
 
 
 
-    /// Header dell'applicazione con logo
+    /// Application header with logo.
     fn app_header(&self, _theme: &Theme) -> Element<Message> {
         container(
             column![
-                // Logo (emoji come placeholder)
+                // Logo
                 text("📱")
                     .size(64)
                     .style(styles::colors::TEXT_PRIMARY),
                 
                 Space::with_height(styles::spacing::MEDIUM),
                 
-                // Nome applicazione
+                // Application name
                 text("AirDropd")
                     .size(32)
                     .style(styles::colors::TEXT_PRIMARY),
                 
-                // Sottotitolo
+                // Subtitle
                 text("AirDrop for Windows")
                     .size(16)
                     .style(styles::colors::TEXT_MUTED),
@@ -142,7 +141,7 @@ impl AboutView {
         .into()
     }
 
-    /// Informazioni sulla versione
+    /// Version information.
     fn version_info(&self, _theme: &Theme) -> Element<Message> {
         let version_items = column![
             row![
@@ -212,7 +211,7 @@ impl AboutView {
         .into()
     }
 
-    /// Descrizione dell'applicazione
+    /// Application description.
     fn description(&self, _theme: &Theme) -> Element<Message> {
         container(
             column![
@@ -239,7 +238,7 @@ impl AboutView {
         .into()
     }
 
-    /// Funzionalità principali
+    /// Main features.
     fn features(&self, theme: &Theme) -> Element<Message> {
         let features_list = column![
             (&self).feature_item("📁", "File & Folder Sharing", "Send and receive files via AirDrop", theme),
@@ -268,7 +267,7 @@ impl AboutView {
         .into()
     }
 
-    /// Singola funzionalità
+    /// Single feature item.
     fn feature_item(
         &self,
         icon: &str,
@@ -297,7 +296,7 @@ impl AboutView {
         .into()
     }
 
-    /// Crediti e riconoscimenti
+    /// Credits and acknowledgements.
     fn credits(&self, _theme: &Theme) -> Element<Message> {
         container(
             column![
@@ -345,7 +344,7 @@ impl AboutView {
         .into()
     }
 
-    /// Informazioni sulle licenze
+    /// License information.
     fn licenses(&self, _theme: &Theme) -> Element<Message> {
         container(
             column![
@@ -375,7 +374,7 @@ impl AboutView {
         .into()
     }
 
-    /// Collegamenti utili
+    /// Useful links.
     fn links(&self, _theme: &Theme) -> Element<Message> {
         container(
             column![

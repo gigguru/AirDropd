@@ -1,7 +1,7 @@
-//! Stili e temi per l'interfaccia Iced
+//! Styles and themes for the Iced interface.
 //!
-//! Questo modulo definisce tutti gli stili, colori e dimensioni utilizzati
-//! nell'interfaccia utente per garantire coerenza e un design moderno.
+//! This module defines the styles, colors, and dimensions used by the UI to
+//! keep the design consistent and modern.
 
 use iced::{
     widget::{
@@ -15,7 +15,7 @@ use iced::{
 
 use iced::Theme;
 
-/// Stato visuale per i pulsanti (locale a questo modulo)
+/// Visual state for buttons local to this module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ButtonStatus {
     Active,
@@ -24,7 +24,7 @@ pub enum ButtonStatus {
     Disabled,
 }
 
-/// Dimensioni dei font
+/// Font sizes.
 pub mod font_size {
     pub const TINY: u16 = 10;
     pub const SMALL: u16 = 12;
@@ -33,7 +33,7 @@ pub mod font_size {
     pub const XLARGE: u16 = 24;
 }
 
-/// Spaziature standard
+/// Standard spacing values.
 pub mod spacing {
     use iced::Pixels;
     
@@ -44,9 +44,9 @@ pub mod spacing {
     pub const XLARGE: Pixels = Pixels(32.0);
 }
 
-/// Raggi di curvatura
+/// Border radii.
 pub mod radius {
-    // Costanti numeriche: converti con `Radius::from(...)` nei punti d'uso
+    // Numeric constants: convert with `Radius::from(...)` at call sites.
     pub const SMALL: f32 = 4.0;
     pub const MEDIUM: f32 = 8.0;
     pub const LARGE: f32 = 12.0;
@@ -80,23 +80,23 @@ pub mod colors {
     pub const RADAR_RING: Color = Color::from_rgba(0.0, 0.48, 1.0, 0.25);
     pub const RADAR_CENTER: Color = Color::from_rgba(0.0, 0.48, 1.0, 0.45);
     
-    // Colori di stato
+    // Status colors
     pub const SUCCESS: Color = Color::from_rgb(0.18, 0.80, 0.44); // #2ECC71
     pub const WARNING: Color = Color::from_rgb(0.95, 0.61, 0.07); // #F39C12
     pub const ERROR: Color = Color::from_rgb(0.91, 0.30, 0.24); // #E74C3C
     pub const INFO: Color = Color::from_rgb(0.20, 0.67, 0.86); // #3498DB
     
-    // Colori per i bordi
+    // Border colors
     pub const BORDER: Color = Color::from_rgb(0.25, 0.27, 0.30); // #404548
     pub const BORDER_FOCUS: Color = PRIMARY;
     pub const BORDER_ERROR: Color = ERROR;
     
-    // Colori per le ombre
+    // Shadow colors
     pub const SHADOW: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.2);
     pub const SHADOW_STRONG: Color = Color::from_rgba(0.0, 0.0, 0.0, 0.4);
 }
 
-/// Stili per il testo
+/// Text styles.
 pub fn text_primary(_theme: &Theme) -> TextAppearance {
     TextAppearance {
         color: Some(colors::TEXT_PRIMARY),
@@ -139,7 +139,7 @@ pub fn text_error(_theme: &Theme) -> TextAppearance {
     }
 }
 
-/// Stili per i container
+/// Container styles.
 pub fn container_primary(_theme: &Theme) -> ContainerAppearance {
     ContainerAppearance {
         text_color: Some(colors::TEXT_PRIMARY),
@@ -214,7 +214,7 @@ pub fn container_disabled(_theme: &Theme) -> ContainerAppearance {
     }
 }
 
-/// Container per notifiche
+/// Notification containers.
 pub fn container_success(_theme: &Theme) -> ContainerAppearance {
     ContainerAppearance {
         text_color: Some(colors::TEXT_PRIMARY),
@@ -303,7 +303,7 @@ pub fn container_info(_theme: &Theme) -> ContainerAppearance {
     }
 }
 
-/// Stili per i pulsanti
+/// Button styles.
 pub fn button_primary(_theme: &Theme, status: ButtonStatus) -> ButtonAppearance {
     match status {
         ButtonStatus::Active => ButtonAppearance {
@@ -687,7 +687,7 @@ pub fn button_ghost(_theme: &Theme, status: ButtonStatus) -> ButtonAppearance {
     }
 }
 
-/// Stili per le progress bar
+/// Progress bar styles.
 pub fn progress_bar_primary(_theme: &Theme) -> ProgressBarAppearance {
     ProgressBarAppearance {
         background: Background::Color(colors::SURFACE),
