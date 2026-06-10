@@ -79,20 +79,17 @@ impl AirDropdServices {
         }
 
         {
-            let (broadcast_name, device_hash, discoverable) = self
+            let (broadcast_name, discoverable) = self
                 .config
                 .read()
-                .map(|c| (c.broadcast_name.clone(), c.device_ph_bytes(), c.discoverable))
-                .unwrap_or_else(|_| (config::default_broadcast_name(), [0u8; 6], true));
+                .map(|c| (c.broadcast_name.clone(), c.discoverable))
+                .unwrap_or_else(|_| (config::default_broadcast_name(), true));
 
             let mut ble = self.ble.lock().await;
             if let Err(e) = ble.initialize().await {
                 tracing::warn!("BLE unavailable ({}); continuing without BLE discovery", e);
             } else if discoverable {
-                if let Err(e) = ble
-                    .start_advertising_with_name(&broadcast_name, device_hash)
-                    .await
-                {
+                if let Err(e) = ble.start_advertising_with_name(&broadcast_name).await {
                     tracing::warn!("BLE advertising failed: {}", e);
                 }
             }
@@ -113,18 +110,17 @@ impl AirDropdServices {
 
     /// Apply saved settings to live discovery services (mDNS + BLE).
     pub async fn apply_settings(&self) -> anyhow::Result<()> {
-        let (broadcast_name, device_hash, discoverable, auto_accept) = self
+        let (broadcast_name, discoverable, auto_accept) = self
             .config
             .read()
             .map(|c| {
                 (
                     c.broadcast_name.clone(),
-                    c.device_ph_bytes(),
                     c.discoverable,
                     c.auto_accept_incoming,
                 )
             })
-            .unwrap_or_else(|_| (config::default_broadcast_name(), [0; 6], true, false));
+            .unwrap_or_else(|_| (config::default_broadcast_name(), true, false));
 
         self.incoming_transfer.set_auto_accept(auto_accept);
 
@@ -136,7 +132,7 @@ impl AirDropdServices {
         {
             let ble = self.ble.lock().await;
             if discoverable {
-                ble.restart_advertising(&broadcast_name, device_hash).await?;
+                ble.restart_advertising(&broadcast_name).await?;
             } else {
                 let _ = ble.stop_advertising().await;
             }

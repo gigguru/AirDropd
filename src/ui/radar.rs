@@ -312,7 +312,10 @@ impl<'a> Program<Message> for Radar<'a> {
                 ..Default::default()
             });
             // Device-type line, e.g. "iPhone" or "MacBook · Bluetooth".
-            let kind_line = if ble_only {
+            let airdrop_active = device.txt_records.contains_key("airdrop_active");
+            let kind_line = if airdrop_active {
+                "AirDrop open · Bluetooth".to_string()
+            } else if ble_only {
                 format!("{} · Bluetooth", device.kind().label())
             } else {
                 device.kind().label().to_string()

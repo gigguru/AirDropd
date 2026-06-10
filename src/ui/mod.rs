@@ -39,6 +39,17 @@ fn probe_name_cache() -> &'static ProbeNameCache {
     static CACHE: std::sync::OnceLock<ProbeNameCache> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
+
+/// Stable 4-hex-char suffix so anonymous Apple BLE devices stay distinct on
+/// the radar. (Apple rotates BLE addresses every ~15 minutes by design, so
+/// the suffix changes over time — that is inherent to the privacy scheme.)
+fn short_ble_suffix(id: &str) -> String {
+    let mut hash: u16 = 0;
+    for b in id.bytes() {
+        hash = hash.rotate_left(5) ^ (b as u16);
+    }
+    format!("{:04X}", hash)
+}
  
 /// Application theme, used by `styles` for custom styling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1220,25 +1231,49 @@ impl AirDropdApp {
 
         let ble_devices = services.ble.lock().await.get_discovered_devices().await;
         for ble in ble_devices {
-            if ble.name.is_empty() || ble.name.to_lowercase() == our_name {
+            if ble.name.to_lowercase() == our_name && !ble.name.is_empty() {
                 continue;
             }
             let rssi = if ble.rssi != 0 { Some(ble.rssi) } else { None };
-            // Device also found over Wi-Fi: attach the BLE signal strength so the
-            // radar can place it by physical distance.
-            if let Some(key) = by_name.get(&ble.name.to_lowercase()) {
-                if let Some(device) = by_key.get_mut(key) {
-                    device.rssi = rssi;
+
+            if !ble.name.is_empty() {
+                // Device also found over Wi-Fi: attach the BLE signal strength
+                // so the radar can place it by physical distance.
+                if let Some(key) = by_name.get(&ble.name.to_lowercase()) {
+                    if let Some(device) = by_key.get_mut(key) {
+                        device.rssi = rssi;
+                    }
+                    continue;
                 }
-                continue;
             }
+
+            // iPhones and iPads never include a name in their Continuity
+            // beacons and only advertise AirDrop over AWDL (not regular
+            // Wi-Fi), so a nameless Apple beacon is how an iPhone looks
+            // from Windows. Surface it instead of dropping it.
+            let name = if !ble.name.is_empty() {
+                ble.name.clone()
+            } else if ble.apple {
+                format!("Apple device {}", short_ble_suffix(&ble.id))
+            } else {
+                continue;
+            };
+
+            let mut txt_records = HashMap::new();
+            if ble.name.is_empty() {
+                txt_records.insert("anonymous".to_string(), "1".to_string());
+            }
+            if ble.airdrop_active {
+                txt_records.insert("airdrop_active".to_string(), "1".to_string());
+            }
+
             let key = format!("ble:{}", ble.id);
             by_key.entry(key).or_insert(crate::network::DiscoveredDevice {
-                name: ble.name,
+                name,
                 address: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
                 port: 0,
                 service_type: crate::network::ServiceType::AirDrop,
-                txt_records: HashMap::new(),
+                txt_records,
                 rssi,
             });
         }

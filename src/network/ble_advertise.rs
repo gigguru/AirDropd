@@ -5,7 +5,6 @@ mod imp {
     use anyhow::{Context, Result};
     use std::sync::Mutex;
     use tracing::{info, warn};
-    use windows::core::HSTRING;
     use windows::Devices::Bluetooth::Advertisement::{
         BluetoothLEAdvertisementPublisher, BluetoothLEAdvertisementPublisherStatus,
         BluetoothLEManufacturerData,
@@ -14,22 +13,30 @@ mod imp {
 
     static PUBLISHER: Mutex<Option<BluetoothLEAdvertisementPublisher>> = Mutex::new(None);
 
-    fn airdrop_manufacturer_payload(device_hash: [u8; 6]) -> Result<windows::Storage::Streams::IBuffer> {
+    /// Apple AirDrop BLE advertisement TLV, byte-exact per Apple's Continuity
+    /// protocol (and OpenDrop): `05 12` then 18 bytes — 8 zero padding,
+    /// version 0x01, four 2-byte truncated contact hashes, one trailing zero.
+    /// Zeroed hashes are what a sender with no contact identity broadcasts;
+    /// receivers in "Everyone" mode wake their AirDrop stack on any valid
+    /// beacon. A malformed TLV (wrong length byte) is silently ignored by
+    /// Apple parsers, so this format must match exactly.
+    fn airdrop_manufacturer_payload() -> Result<windows::Storage::Streams::IBuffer> {
         let writer = DataWriter::new()?;
         // Payload only — Windows prepends company ID 0x004C via Create().
-        writer.WriteByte(0x05)?; // AirDrop proximity type
-        writer.WriteByte(0x01)?; // discoverable
-        for byte in device_hash {
-            writer.WriteByte(byte)?;
+        writer.WriteByte(0x05)?; // type: AirDrop
+        writer.WriteByte(0x12)?; // length: 18
+        for _ in 0..8 {
+            writer.WriteByte(0x00)?; // padding
         }
-        writer.WriteByte(0x00)?;
-        writer.WriteByte(0x00)?;
-        writer.WriteByte(0x00)?;
+        writer.WriteByte(0x01)?; // version
+        for _ in 0..8 {
+            writer.WriteByte(0x00)?; // 4 × 2-byte contact hashes (none)
+        }
         writer.WriteByte(0x00)?;
         writer.DetachBuffer().context("Failed to build BLE payload")
     }
 
-    pub fn start(device_name: &str, device_hash: [u8; 6]) -> Result<()> {
+    pub fn start(device_name: &str) -> Result<()> {
         let mut guard = PUBLISHER
             .lock()
             .map_err(|_| anyhow::anyhow!("BLE publisher lock poisoned"))?;
@@ -43,9 +50,10 @@ mod imp {
         let publisher = BluetoothLEAdvertisementPublisher::new()?;
         let advertisement = publisher.Advertisement()?;
 
-        advertisement.SetLocalName(&HSTRING::from(device_name))?;
-
-        let buffer = airdrop_manufacturer_payload(device_hash)?;
+        // No local name: Apple AirDrop beacons never carry one, and the
+        // 20-byte TLV plus a name can exceed the 31-byte legacy advertising
+        // limit, which makes the Windows publisher fail to start entirely.
+        let buffer = airdrop_manufacturer_payload()?;
         let mfg = BluetoothLEManufacturerData::Create(0x004C, &buffer)?;
         advertisement.ManufacturerData()?.Append(&mfg)?;
 
@@ -77,7 +85,7 @@ mod imp {
 pub use imp::{start, stop};
 
 #[cfg(not(windows))]
-pub fn start(_device_name: &str, _device_hash: [u8; 6]) -> anyhow::Result<()> {
+pub fn start(_device_name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 

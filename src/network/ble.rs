@@ -8,24 +8,77 @@ use tokio::runtime::Handle;
 use tracing::{info, warn, debug};
 use uuid::Uuid;
 use std::time::Duration;
-use rand::Rng;
-use sha2::{Sha256, Digest};
 
-// Apple AirDrop BLE Service UUIDs
-const AIRDROP_SERVICE_UUID: &str = "7ba94d80-ca9b-4d8d-b1db-21e8a4e6b256";
-
-// Apple Continuity Service UUID (used for device identification)
-const CONTINUITY_SERVICE_UUID: &str = "d0611e78-bbb4-4591-a5f8-487910ae4366";
+/// Apple's BLE manufacturer company identifier.
+const APPLE_COMPANY_ID: u16 = 0x004C;
 
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct BleDevice {
     pub id: String,
+    /// BLE local name. Apple Continuity beacons never include one, so this
+    /// is empty for iPhones/iPads detected purely over Bluetooth.
     pub name: String,
     pub rssi: i16,
     pub manufacturer_data: HashMap<u16, Vec<u8>>,
     pub service_data: HashMap<Uuid, Vec<u8>>,
     pub last_seen: std::time::Instant,
+    /// Device broadcasts Apple Continuity manufacturer data.
+    pub apple: bool,
+    /// Device is broadcasting an AirDrop beacon (type 0x05) right now —
+    /// its owner has the share sheet / AirDrop browser open.
+    pub airdrop_active: bool,
+}
+
+/// What an Apple Continuity advertisement tells us about a device.
+#[derive(Default)]
+struct AppleBeacon {
+    is_apple: bool,
+    /// type 0x05: actively browsing AirDrop (share sheet open).
+    airdrop: bool,
+    /// Presence beacons emitted by iPhones/iPads/Macs while idle:
+    /// 0x10 Nearby Info, 0x0C Handoff, 0x0F Nearby Action, 0x0E Tethering.
+    presence: bool,
+    /// Accessory beacons we don't want on the radar:
+    /// 0x02 iBeacon, 0x07 Proximity Pairing (AirPods), 0x12 Find My (AirTag).
+    accessory_only: bool,
+}
+
+/// Parse the type-length-value stream inside Apple manufacturer data.
+fn parse_apple_beacon(data: &[u8]) -> AppleBeacon {
+    let mut beacon = AppleBeacon {
+        is_apple: true,
+        ..Default::default()
+    };
+    let mut seen_accessory = false;
+    let mut seen_device = false;
+
+    let mut i = 0;
+    while i + 1 < data.len() {
+        let msg_type = data[i];
+        let len = data[i + 1] as usize;
+        match msg_type {
+            0x05 => {
+                beacon.airdrop = true;
+                seen_device = true;
+            }
+            0x10 | 0x0C | 0x0F | 0x0E | 0x0B | 0x0D => {
+                // Nearby Info / Handoff / Nearby Action / Tethering /
+                // Magic Switch / Tethering Source — phones, tablets, Macs.
+                beacon.presence = true;
+                seen_device = true;
+            }
+            0x02 | 0x07 | 0x12 | 0x0A => {
+                // iBeacon / AirPods pairing / Find My / AirPlay target.
+                seen_accessory = true;
+            }
+            _ => {}
+        }
+        i += 2 + len;
+    }
+
+    beacon.accessory_only = seen_accessory && !seen_device;
+    beacon
 }
 
 pub struct BleManager {
@@ -71,45 +124,6 @@ impl BleManager {
         Ok(())
     }
 
-    // Generate Apple-compatible device hash for AirDrop
-    #[allow(dead_code)]
-    fn generate_device_hash() -> String {
-        let mut rng = rand::thread_rng();
-        let random_bytes: [u8; 6] = rng.gen();
-        
-        let mut hasher = Sha256::new();
-        hasher.update(&random_bytes);
-        hasher.update(b"AirDropd");
-        
-        let result = hasher.finalize();
-        hex::encode(&result[..6])
-    }
-
-    // Create Apple-compatible manufacturer data for AirDrop
-    #[allow(dead_code)]
-    fn create_airdrop_manufacturer_data() -> Vec<u8> {
-        let mut data = Vec::new();
-        
-        // Apple Company ID (0x004C)
-        data.extend_from_slice(&[0x4C, 0x00]);
-        
-        // AirDrop Advertisement Type (0x05)
-        data.push(0x05);
-        
-        // Flags (discoverable, available)
-        data.push(0x01);
-        
-        // Device hash (6 bytes)
-        let hash = Self::generate_device_hash();
-        let hash_bytes = hex::decode(&hash).unwrap_or_else(|_| vec![0; 6]);
-        data.extend_from_slice(&hash_bytes[..6]);
-        
-        // Additional Apple-specific data
-        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Reserved
-        
-        data
-    }
-
     pub async fn start_scanning(&self) -> Result<()> {
         let adapter = self.adapter.as_ref()
             .ok_or_else(|| anyhow!("BLE adapter not initialized"))?;
@@ -142,50 +156,50 @@ impl BleManager {
                 match adapter_clone.peripherals().await {
                     Ok(peripherals) => {
                         for peripheral in peripherals {
-                            if let Ok(properties) = peripheral.properties().await {
-                                if let Some(props) = properties {
-                                    let device_id = peripheral.id().to_string();
-                                    
-                                    // Apple manufacturer payload: type 0x05 = AirDrop proximity beacon.
-                                    // btleplug stores data without the 0x004C company id prefix.
-                                    let is_airdrop_device = props.manufacturer_data
-                                        .get(&0x004C)
-                                        .map(|data| {
-                                            data.first() == Some(&0x05)
-                                                || (data.len() >= 3 && data[2] == 0x05)
-                                        })
-                                        .unwrap_or(false);
+                            let props = match peripheral.properties().await {
+                                Ok(Some(props)) => props,
+                                _ => continue,
+                            };
+                            let device_id = peripheral.id().to_string();
 
-                                    let airdrop_uuid = Uuid::parse_str(AIRDROP_SERVICE_UUID).unwrap();
-                                    let continuity_uuid =
-                                        Uuid::parse_str(CONTINUITY_SERVICE_UUID).unwrap();
+                            // btleplug strips the company-id prefix from
+                            // manufacturer data and keys the map with it.
+                            let beacon = props
+                                .manufacturer_data
+                                .get(&APPLE_COMPANY_ID)
+                                .map(|data| parse_apple_beacon(data))
+                                .unwrap_or_default();
 
-                                    if is_airdrop_device
-                                        || props.services.contains(&airdrop_uuid)
-                                        || props.services.contains(&continuity_uuid)
-                                    {
-                                        
-                                        let local_name = props
-                                        .local_name
-                                        .clone()
-                                        .unwrap_or_else(|| "Unknown AirDrop Device".to_string());
+                            let local_name = props.local_name.clone().unwrap_or_default();
 
-                                    let device = BleDevice {
-                                        id: device_id.clone(),
-                                        name: local_name.clone(),
-                                        rssi: props.rssi.unwrap_or(0),
-                                        manufacturer_data: props.manufacturer_data,
-                                        service_data: props.service_data,
-                                        last_seen: std::time::Instant::now(),
-                                    };
-
-                                        let mut devices_lock = devices.lock().await;
-                                        devices_lock.insert(device_id, device);
-                                            
-                                    debug!("Discovered AirDrop BLE device: {}", local_name);
-                                    }
-                                }
+                            // Keep Apple devices only (phones, tablets, Macs);
+                            // drop accessories (AirPods, AirTags, iBeacons)
+                            // and non-Apple Bluetooth noise.
+                            let apple_device = beacon.is_apple && !beacon.accessory_only;
+                            let has_signal =
+                                beacon.airdrop || beacon.presence || !local_name.is_empty();
+                            if !apple_device || !has_signal {
+                                continue;
                             }
+
+                            let device = BleDevice {
+                                id: device_id.clone(),
+                                name: local_name.clone(),
+                                rssi: props.rssi.unwrap_or(0),
+                                manufacturer_data: props.manufacturer_data,
+                                service_data: props.service_data,
+                                last_seen: std::time::Instant::now(),
+                                apple: beacon.is_apple,
+                                airdrop_active: beacon.airdrop,
+                            };
+
+                            devices.lock().await.insert(device_id, device);
+                            debug!(
+                                "BLE device: {} apple={} airdrop_active={}",
+                                if local_name.is_empty() { "<anonymous>" } else { &local_name },
+                                beacon.is_apple,
+                                beacon.airdrop
+                            );
                         }
                     }
                     Err(e) => {
@@ -214,11 +228,7 @@ impl BleManager {
         Ok(())
     }
 
-    pub async fn start_advertising_with_name(
-        &self,
-        device_name: &str,
-        device_hash: [u8; 6],
-    ) -> Result<()> {
+    pub async fn start_advertising_with_name(&self, device_name: &str) -> Result<()> {
         let mut is_advertising = self.is_advertising.lock().await;
         if *is_advertising {
             crate::network::ble_advertise::stop();
@@ -231,7 +241,7 @@ impl BleManager {
             device_name
         );
 
-        match crate::network::ble_advertise::start(device_name, device_hash) {
+        match crate::network::ble_advertise::start(device_name) {
             Ok(()) => {
                 *self.is_advertising.lock().await = true;
                 Ok(())
@@ -246,21 +256,21 @@ impl BleManager {
         }
     }
 
-    pub async fn start_advertising(&self, device_hash: [u8; 6]) -> Result<()> {
+    pub async fn start_advertising(&self) -> Result<()> {
         let device_name = hostname::get()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "AirDropd".to_string());
-        self.start_advertising_with_name(&device_name, device_hash).await
+        self.start_advertising_with_name(&device_name).await
     }
 
-    pub async fn restart_advertising(&self, device_name: &str, device_hash: [u8; 6]) -> Result<()> {
+    pub async fn restart_advertising(&self, device_name: &str) -> Result<()> {
         let mut is_advertising = self.is_advertising.lock().await;
         if *is_advertising {
             crate::network::ble_advertise::stop();
             *is_advertising = false;
         }
         drop(is_advertising);
-        self.start_advertising_with_name(device_name, device_hash).await
+        self.start_advertising_with_name(device_name).await
     }
 
     pub async fn stop_advertising(&self) -> Result<()> {
@@ -326,5 +336,49 @@ impl Drop for BleManager {
                 // OS / driver will clean up scanning resources when the process exits.
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_apple_beacon;
+
+    /// Idle iPhones broadcast Nearby Info (0x10) — must register as presence.
+    #[test]
+    fn nearby_info_beacon_is_device_presence() {
+        let data = [0x10, 0x05, 0x01, 0x18, 0x12, 0x34, 0x56];
+        let beacon = parse_apple_beacon(&data);
+        assert!(beacon.is_apple);
+        assert!(beacon.presence);
+        assert!(!beacon.airdrop);
+        assert!(!beacon.accessory_only);
+    }
+
+    /// Share-sheet-open devices broadcast the AirDrop TLV (0x05).
+    #[test]
+    fn airdrop_beacon_is_detected() {
+        let mut data = vec![0x05, 0x12];
+        data.extend_from_slice(&[0u8; 18]);
+        let beacon = parse_apple_beacon(&data);
+        assert!(beacon.airdrop);
+        assert!(!beacon.accessory_only);
+    }
+
+    /// AirPods (proximity pairing 0x07) must not appear on the radar.
+    #[test]
+    fn airpods_beacon_is_accessory_only() {
+        let data = [0x07, 0x19, 0x01, 0x0E, 0x20, 0x00, 0x00];
+        let beacon = parse_apple_beacon(&data);
+        assert!(beacon.accessory_only);
+        assert!(!beacon.presence);
+    }
+
+    /// A device emitting both Handoff and an accessory TLV is still a device.
+    #[test]
+    fn mixed_beacon_prefers_device_classification() {
+        let data = [0x02, 0x02, 0xAA, 0xBB, 0x0C, 0x02, 0x01, 0x02];
+        let beacon = parse_apple_beacon(&data);
+        assert!(beacon.presence);
+        assert!(!beacon.accessory_only);
     }
 }

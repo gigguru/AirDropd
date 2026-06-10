@@ -337,10 +337,14 @@ impl<'a> MainView<'a> {
         let ble_only = device.address.is_unspecified() || device.port == 0;
 
         let hint: Element<'a, Message> = if ble_only {
-            text("Visible via Bluetooth — waiting for Wi‑Fi to enable transfers")
-                .size(11)
-                .style(styles::text_color_muted(*theme))
-                .into()
+            text(
+                "Detected via Bluetooth. iPhones/iPads only accept AirDrop over \
+                 Apple's peer-to-peer Wi-Fi, so transfers must start from that \
+                 device: open its Share sheet and pick this PC.",
+            )
+            .size(11)
+            .style(styles::text_color_muted(*theme))
+            .into()
         } else {
             Space::with_height(0).into()
         };
