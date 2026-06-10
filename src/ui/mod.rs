@@ -19,6 +19,7 @@ use std::time::Duration;
 pub mod components;
 pub mod assets;
 pub mod messages;
+pub mod radar;
 pub mod styles;
 pub mod tray;
 pub mod views;
@@ -51,9 +52,6 @@ pub struct AirDropdApp {
     
     /// Stato della scansione
     is_scanning: bool,
-    
-    /// Stato AirPlay
-    airplay_status: crate::protocols::airplay::AirPlayStatus,
     
     /// Stato AirDrop
     airdrop_status: crate::protocols::airdrop::AirDropStatus,
@@ -103,6 +101,16 @@ pub struct AirDropdApp {
 
     /// Pending incoming AirDrop /Ask request (shown in accept dialog)
     pending_incoming: Option<crate::protocols::incoming_transfer::IncomingTransferDetails>,
+
+    /// OS file-drag currently hovering over the window
+    drop_hover: bool,
+
+    /// Files collected from the current drop gesture (debounced)
+    dropped_files: Vec<std::path::PathBuf>,
+    drop_generation: u64,
+
+    /// Dropped files waiting for the user to pick a recipient
+    pending_recipient_files: Option<Vec<std::path::PathBuf>>,
 }
 
 /// Viste disponibili nell'applicazione
@@ -160,7 +168,6 @@ impl Application for AirDropdApp {
             discovered_devices: Vec::new(),
             selected_device: None,
             is_scanning: false,
-            airplay_status: crate::protocols::airplay::AirPlayStatus::Idle,
             airdrop_status: crate::protocols::airdrop::AirDropStatus::Idle,
             file_transfer_progress: None,
             notifications: Vec::new(),
@@ -172,6 +179,10 @@ impl Application for AirDropdApp {
             splash_tick: 0,
             sonar_tick: 0,
             pending_incoming: None,
+            drop_hover: false,
+            dropped_files: Vec::new(),
+            drop_generation: 0,
+            pending_recipient_files: None,
         };
 
         (app, Command::none())
@@ -357,67 +368,99 @@ impl Application for AirDropdApp {
 
             Message::SendFile(device) => {
                 let device = device.clone();
-                let service_id = self
-                    .services
-                    .config
-                    .read()
-                    .map(|c| c.service_id.clone())
-                    .unwrap_or_default();
                 Command::perform(
                     async move {
-                        use rfd::AsyncFileDialog;
-                        let file = AsyncFileDialog::new().pick_file().await;
-                        let Some(handle) = file else {
-                            return Err("No file selected".to_string());
-                        };
-                        let path = handle.path().to_path_buf();
-                        let port = match device.service_type {
-                            crate::network::ServiceType::AirDrop
-                            | crate::network::ServiceType::Companion => {
-                                if device.port > 0 { device.port } else { 8770 }
-                            }
-                            _ => if device.port > 0 { device.port } else { 8770 },
-                        };
-                        if device.address.is_unspecified() {
-                            return Err(format!(
-                                "{} is visible via Bluetooth only — wait for Wi‑Fi discovery or move closer on the same network.",
-                                device.name
-                            ));
-                        }
-                        let addr = std::net::SocketAddr::new(device.address, port);
-                        crate::protocols::airdrop_client::AirDropClient::send_file(
-                            addr,
-                            &path,
-                            &service_id,
-                        )
-                        .await
-                        .map_err(|e| e.to_string())?;
-                        Ok::<(), String>(())
+                        let files = rfd::AsyncFileDialog::new()
+                            .set_title("Choose files to send")
+                            .pick_files()
+                            .await;
+                        let paths: Vec<std::path::PathBuf> = files
+                            .map(|handles| {
+                                handles.iter().map(|h| h.path().to_path_buf()).collect()
+                            })
+                            .unwrap_or_default();
+                        (device, paths)
                     },
-                    |res| match res {
-                        Ok(()) => Message::FileSendCompleted(Ok(())),
-                        Err(e) => Message::FileSendCompleted(Err(e)),
+                    |(device, paths)| {
+                        if paths.is_empty() {
+                            Message::Tick
+                        } else {
+                            Message::ChooseRecipientWithFiles(device, paths)
+                        }
                     },
                 )
             }
 
+            Message::SendFolder(device) => {
+                let device = device.clone();
+                Command::perform(
+                    async move {
+                        let folder = rfd::AsyncFileDialog::new()
+                            .set_title("Choose a folder to send")
+                            .pick_folder()
+                            .await;
+                        let paths: Vec<std::path::PathBuf> = folder
+                            .map(|h| vec![h.path().to_path_buf()])
+                            .unwrap_or_default();
+                        (device, paths)
+                    },
+                    |(device, paths)| {
+                        if paths.is_empty() {
+                            Message::Tick
+                        } else {
+                            Message::ChooseRecipientWithFiles(device, paths)
+                        }
+                    },
+                )
+            }
+
+            Message::ChooseRecipientWithFiles(device, paths) => self.start_send(device, paths),
+
             Message::SendLink(device, url) => {
-                self.link_url = url.clone();
+                self.show_link_dialog = false;
+                let url = url.trim().to_string();
+                let url = if url.starts_with("http://") || url.starts_with("https://") {
+                    url
+                } else {
+                    format!("https://{}", url)
+                };
+                self.link_url.clear();
+                if device.address.is_unspecified() {
+                    self.add_notification(
+                        "Cannot send link".to_string(),
+                        format!(
+                            "{} is visible via Bluetooth only — wait for Wi‑Fi discovery.",
+                            device.name
+                        ),
+                        messages::NotificationType::Error,
+                    );
+                    return Command::none();
+                }
                 self.add_notification(
                     "Sending link".to_string(),
                     format!("Sending link to {}", device.name),
                     messages::NotificationType::Info,
                 );
                 self.airdrop_status = crate::protocols::airdrop::AirDropStatus::Connecting;
+                let service_id = self
+                    .services
+                    .config
+                    .read()
+                    .map(|c| c.service_id.clone())
+                    .unwrap_or_default();
+                let port = if device.port > 0 { device.port } else { 8770 };
+                let addr = std::net::SocketAddr::new(device.address, port);
                 Command::perform(
-                    async {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                        Ok::<(), String>(())
+                    async move {
+                        crate::protocols::airdrop_client::AirDropClient::send_link(
+                            addr,
+                            &url,
+                            &service_id,
+                        )
+                        .await
+                        .map_err(|e| e.to_string())
                     },
-                    |res| match res {
-                        Ok(()) => Message::FileSendCompleted(Ok(())),
-                        Err(e) => Message::FileSendCompleted(Err(e)),
-                    },
+                    |res| Message::FileSendCompleted(res),
                 )
             }
 
@@ -479,37 +522,71 @@ impl Application for AirDropdApp {
                 }
                 Command::none()
             }
-            Message::StartScreenMirroring(_device) => {
-                self.airplay_status = crate::protocols::airplay::AirPlayStatus::Connecting;
-                Command::perform(
-                    async {
-                        tokio::time::sleep(Duration::from_secs(3)).await;
-                        crate::protocols::airplay::AirPlayStatus::Connected
-                    },
-                    Message::AirPlayStatusChanged,
-                )
-            }
 
-            Message::StopScreenMirroring => {
-                self.airplay_status = crate::protocols::airplay::AirPlayStatus::Idle;
+            Message::FilesHoveringWindow(hovering) => {
+                self.drop_hover = hovering;
                 Command::none()
             }
 
-            Message::AirPlayStatusChanged(status) => {
-                self.airplay_status = status.clone();
-                match status {
-                    crate::protocols::airplay::AirPlayStatus::Connected => self.add_notification(
-                        "AirPlay connected".to_string(),
-                        "AirPlay connection established".to_string(),
-                        messages::NotificationType::Success,
-                    ),
-                    crate::protocols::airplay::AirPlayStatus::Failed(err) => self.add_notification(
-                        "AirPlay error".to_string(),
-                        err,
-                        messages::NotificationType::Error,
-                    ),
-                    _ => {}
+            Message::FileDroppedOnWindow(path) => {
+                // The OS delivers one event per dropped file; debounce so a
+                // multi-file drop becomes a single transfer.
+                self.drop_hover = false;
+                self.dropped_files.push(path);
+                self.drop_generation = self.drop_generation.wrapping_add(1);
+                let generation = self.drop_generation;
+                Command::perform(
+                    async move {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        generation
+                    },
+                    Message::ProcessDroppedFiles,
+                )
+            }
+
+            Message::ProcessDroppedFiles(generation) => {
+                if generation != self.drop_generation || self.dropped_files.is_empty() {
+                    return Command::none();
                 }
+                let files = std::mem::take(&mut self.dropped_files);
+
+                // Send straight away when the recipient is unambiguous.
+                if let Some(device) = self.selected_device.clone() {
+                    return self.start_send(device, files);
+                }
+                let reachable: Vec<_> = self
+                    .discovered_devices
+                    .iter()
+                    .filter(|d| !d.address.is_unspecified() && d.port > 0)
+                    .cloned()
+                    .collect();
+                if reachable.len() == 1 {
+                    return self.start_send(reachable[0].clone(), files);
+                }
+                if self.discovered_devices.is_empty() {
+                    self.add_notification(
+                        "No devices nearby".to_string(),
+                        "Open AirDrop on the receiving device, then drop the files again."
+                            .to_string(),
+                        messages::NotificationType::Warning,
+                    );
+                    return Command::none();
+                }
+                // Several candidates: let the user choose.
+                self.pending_recipient_files = Some(files);
+                Command::none()
+            }
+
+            Message::ChooseRecipient(device) => {
+                if let Some(files) = self.pending_recipient_files.take() {
+                    self.start_send(device, files)
+                } else {
+                    Command::none()
+                }
+            }
+
+            Message::CancelRecipientChooser => {
+                self.pending_recipient_files = None;
                 Command::none()
             }
             
@@ -726,6 +803,14 @@ impl Application for AirDropdApp {
             }
 
             Message::PollIncomingTransfer => {
+                // Piggy-back outgoing transfer progress on the same timer.
+                if let Ok(slot) = self.services.send_progress.lock() {
+                    if let Some(progress) = *slot {
+                        self.file_transfer_progress = Some(progress);
+                        self.airdrop_status =
+                            crate::protocols::airdrop::AirDropStatus::Transferring(progress);
+                    }
+                }
                 let gate = self.services.incoming_transfer.clone();
                 Command::perform(async move { gate.peek().await }, Message::UpdatePendingIncoming)
             }
@@ -945,12 +1030,20 @@ impl Application for AirDropdApp {
         let incoming_poll =
             time::every(Duration::from_millis(250)).map(|_| Message::PollIncomingTransfer);
 
-        let window_events = event::listen_with(|event, _status| {
-            if let Event::Window(_id, window::Event::CloseRequested) = event {
+        let window_events = event::listen_with(|event, _status| match event {
+            Event::Window(_id, window::Event::CloseRequested) => {
                 Some(Message::WindowCloseRequested)
-            } else {
-                None
             }
+            Event::Window(_id, window::Event::FileHovered(_)) => {
+                Some(Message::FilesHoveringWindow(true))
+            }
+            Event::Window(_id, window::Event::FilesHoveredLeft) => {
+                Some(Message::FilesHoveringWindow(false))
+            }
+            Event::Window(_id, window::Event::FileDropped(path)) => {
+                Some(Message::FileDroppedOnWindow(path))
+            }
+            _ => None,
         });
 
         let splash = if matches!(self.current_view, AppView::Splash) {
@@ -992,13 +1085,14 @@ impl AirDropdApp {
             self.selected_device.as_ref(),
             self.is_scanning,
             self.sonar_tick,
-            &self.airplay_status,
             &self.airdrop_status,
             self.file_transfer_progress,
             &self.notifications,
             self.show_link_dialog,
             &self.link_url,
             self.pending_incoming.as_ref(),
+            self.pending_recipient_files.as_deref(),
+            self.drop_hover,
             self.discovery_visibility,
             &self.theme,
         )
@@ -1086,7 +1180,13 @@ impl AirDropdApp {
             if ble.name.is_empty() || ble.name.to_lowercase() == our_name {
                 continue;
             }
-            if by_name.contains_key(&ble.name.to_lowercase()) {
+            let rssi = if ble.rssi != 0 { Some(ble.rssi) } else { None };
+            // Device also found over Wi-Fi: attach the BLE signal strength so the
+            // radar can place it by physical distance.
+            if let Some(key) = by_name.get(&ble.name.to_lowercase()) {
+                if let Some(device) = by_key.get_mut(key) {
+                    device.rssi = rssi;
+                }
                 continue;
             }
             let key = format!("ble:{}", ble.id);
@@ -1096,6 +1196,7 @@ impl AirDropdApp {
                 port: 0,
                 service_type: crate::network::ServiceType::AirDrop,
                 txt_records: HashMap::new(),
+                rssi,
             });
         }
 
@@ -1124,13 +1225,24 @@ impl AirDropdApp {
             best_by_name
                 .entry(key)
                 .and_modify(|existing| {
+                    let rssi = device.rssi.or(existing.rssi);
                     if rank(&device) < rank(existing) {
                         *existing = device.clone();
                     }
+                    existing.rssi = rssi;
                 })
                 .or_insert(device);
         }
         devices = best_by_name.into_values().collect();
+
+        // Media-only endpoints (Apple TV, speakers) can't receive AirDrop —
+        // keep the radar focused on devices that can actually exchange files.
+        devices.retain(|d| {
+            !matches!(
+                d.service_type,
+                crate::network::ServiceType::AirPlay | crate::network::ServiceType::Raop
+            )
+        });
 
         devices.sort_by(|a, b| {
             let rank = |d: &crate::network::DiscoveredDevice| match d.service_type {
@@ -1146,15 +1258,66 @@ impl AirDropdApp {
         devices
     }
 
-    /// Simula il trasferimento di un file
-    async fn simulate_file_transfer() -> f32 {
-        for progress in (0..=100).step_by(10) {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            if progress == 100 {
-                return 100.0;
-            }
+    /// Kick off a real AirDrop transfer of files/folders to a device.
+    fn start_send(
+        &mut self,
+        device: crate::network::DiscoveredDevice,
+        paths: Vec<std::path::PathBuf>,
+    ) -> Command<Message> {
+        if paths.is_empty() {
+            return Command::none();
         }
-        100.0
+        if device.address.is_unspecified() || device.port == 0 {
+            self.add_notification(
+                "Cannot send yet".to_string(),
+                format!(
+                    "{} is visible via Bluetooth only — join the same Wi‑Fi network to transfer.",
+                    device.name
+                ),
+                messages::NotificationType::Error,
+            );
+            return Command::none();
+        }
+
+        let count = paths.len();
+        let label = if count == 1 {
+            paths[0]
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "1 item".to_string())
+        } else {
+            format!("{} items", count)
+        };
+        self.add_notification(
+            "Sending".to_string(),
+            format!("{} → {}", label, device.name),
+            messages::NotificationType::Info,
+        );
+        self.airdrop_status = crate::protocols::airdrop::AirDropStatus::Connecting;
+        self.file_transfer_progress = Some(0.0);
+
+        let service_id = self
+            .services
+            .config
+            .read()
+            .map(|c| c.service_id.clone())
+            .unwrap_or_default();
+        let progress = self.services.send_progress.clone();
+        let addr = std::net::SocketAddr::new(device.address, device.port);
+
+        Command::perform(
+            async move {
+                crate::protocols::airdrop_client::AirDropClient::send_files(
+                    addr,
+                    paths,
+                    &service_id,
+                    progress,
+                )
+                .await
+                .map_err(|e| e.to_string())
+            },
+            Message::FileSendCompleted,
+        )
     }
 
     /// Aggiunge una notifica alla lista

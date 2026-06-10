@@ -2,7 +2,7 @@
 name = "airdropd"
 version = "0.1.0"
 edition = "2021"
-description = "AirDrop and AirPlay for Windows"
+description = "AirDrop for Windows — share files with iPhones, iPads and Macs"
 authors = ["Rhythmic Records"]
 license = "Proprietary"
 autobins = false
@@ -24,7 +24,7 @@ panic = "abort"
 [dependencies]
 tokio = { version = "1.28", features = ["full"] }
 mdns-sd = { version = "0.7.5", features = ["async"] }
-iced = { version = "0.12", features = ["tokio", "image", "svg"] }
+iced = { version = "0.12", features = ["tokio", "image", "svg", "canvas"] }
 anyhow = "1.0"
 thiserror = "1.0"
 tracing = "0.1"

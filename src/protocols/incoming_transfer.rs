@@ -22,10 +22,17 @@ pub struct IncomingTransferDetails {
     pub sender_name: String,
     pub sender_model: String,
     pub files: Vec<IncomingFileInfo>,
+    /// URL being shared instead of (or alongside) files.
+    pub link: Option<String>,
 }
 
 impl IncomingTransferDetails {
     pub fn summary(&self) -> String {
+        if let Some(link) = &self.link {
+            if self.files.is_empty() {
+                return format!("{} wants to share a link: {}", self.sender_name, link);
+            }
+        }
         match self.files.len() {
             0 => format!("{} wants to share files", self.sender_name),
             1 => format!(
@@ -174,10 +181,22 @@ pub fn parse_ask_request(body: &[u8]) -> Result<IncomingTransferDetails> {
         }
     }
 
+    // URL shares arrive as an Items array of strings with no Files.
+    let link = dict.get("Items").and_then(|v| match v {
+        Value::Array(items) => items.iter().find_map(|item| {
+            item.as_string()
+                .filter(|s| s.starts_with("http://") || s.starts_with("https://"))
+                .map(str::to_string)
+        }),
+        Value::String(s) if s.starts_with("http") => Some(s.clone()),
+        _ => None,
+    });
+
     Ok(IncomingTransferDetails {
         sender_name,
         sender_model,
         files,
+        link,
     })
 }
 

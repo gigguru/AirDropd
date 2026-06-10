@@ -67,8 +67,10 @@ fn extract_newc_cpio<R: Read>(mut reader: R, dest_dir: &Path) -> Result<Vec<Path
             return Err(anyhow!("invalid cpio magic"));
         }
 
-        let namesize = parse_hex_field(&hdr[94..108])?;
-        let filesize = parse_hex_field(&hdr[54..64])?;
+        // newc header: 8-hex-char fields. mode @14, filesize @54, namesize @94.
+        let mode = parse_hex_field(&hdr[14..22]).unwrap_or(0);
+        let filesize = parse_hex_field(&hdr[54..62])?;
+        let namesize = parse_hex_field(&hdr[94..102])?;
 
         let mut name_buf = vec![0u8; namesize];
         reader.read_exact(&mut name_buf).context("read cpio name")?;
@@ -76,24 +78,52 @@ fn extract_newc_cpio<R: Read>(mut reader: R, dest_dir: &Path) -> Result<Vec<Path
             .trim_end_matches('\0')
             .to_string();
 
-        pad_read(&mut reader, namesize)?;
+        // Header (110) + name is padded to a 4-byte boundary.
+        pad_read(&mut reader, 110 + namesize)?;
 
         if name == "TRAILER!!!" {
             break;
         }
 
-        let safe_name = sanitize_filename(Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or("file"));
-        let out_path = unique_path(dest_dir, &safe_name);
+        let is_dir = mode & 0o170000 == 0o040000;
+        let rel_path = sanitize_relative_path(&name);
 
-        if filesize > 0 {
-            let mut data = vec![0u8; filesize];
-            reader.read_exact(&mut data).context("read cpio file data")?;
-            if let Some(parent) = out_path.parent() {
-                std::fs::create_dir_all(parent)?;
+        if is_dir || (filesize == 0 && name.ends_with('/')) {
+            if let Some(rel) = &rel_path {
+                let _ = std::fs::create_dir_all(dest_dir.join(rel));
             }
-            std::fs::write(&out_path, &data)?;
-            saved.push(out_path);
+            pad_read_data(&mut reader, filesize, &mut Vec::new())?;
+            continue;
         }
+
+        let out_path = match &rel_path {
+            // Preserve folder structure; pick a unique name only for the leaf.
+            Some(rel) => {
+                let parent_rel = rel.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+                let parent_abs = dest_dir.join(&parent_rel);
+                std::fs::create_dir_all(&parent_abs)?;
+                let leaf = rel
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("received_file");
+                unique_path(&parent_abs, leaf)
+            }
+            None => unique_path(dest_dir, "received_file"),
+        };
+
+        let mut remaining = filesize;
+        let mut out = std::fs::File::create(&out_path)
+            .with_context(|| format!("create {}", out_path.display()))?;
+        let mut buf = [0u8; 65536];
+        while remaining > 0 {
+            let take = remaining.min(buf.len());
+            reader
+                .read_exact(&mut buf[..take])
+                .context("read cpio file data")?;
+            std::io::Write::write_all(&mut out, &buf[..take])?;
+            remaining -= take;
+        }
+        saved.push(out_path);
 
         pad_read(&mut reader, filesize)?;
     }
@@ -120,6 +150,39 @@ fn sanitize_filename(name: &str) -> String {
     name.chars()
         .map(|c| if r#"<>:"/\|?*"#.contains(c) { '_' } else { c })
         .collect()
+}
+
+/// Convert an archive path into a safe relative path: strips `./` prefixes,
+/// rejects traversal components, and sanitizes every segment for Windows.
+fn sanitize_relative_path(name: &str) -> Option<PathBuf> {
+    let cleaned = name.trim_start_matches("./").replace('\\', "/");
+    let mut out = PathBuf::new();
+    for part in cleaned.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return None;
+        }
+        out.push(sanitize_filename(part));
+    }
+    if out.as_os_str().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Consume and discard `size` data bytes plus padding (for directory records).
+fn pad_read_data<R: Read>(reader: &mut R, size: usize, _scratch: &mut Vec<u8>) -> Result<()> {
+    let mut remaining = size;
+    let mut buf = [0u8; 4096];
+    while remaining > 0 {
+        let take = remaining.min(buf.len());
+        reader.read_exact(&mut buf[..take])?;
+        remaining -= take;
+    }
+    pad_read(reader, size)
 }
 
 fn unique_path(dir: &Path, filename: &str) -> PathBuf {

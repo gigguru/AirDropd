@@ -1,6 +1,6 @@
 Welcome to AirDropd Setup
 
-AirDropd brings Apple-style AirDrop and AirPlay compatibility to Windows 10 and later, so you can discover, send, and receive files with nearby Apple devices and other Windows computers running AirDropd.
+AirDropd brings Apple-style AirDrop compatibility to Windows 10 and later, so you can discover, send, and receive files, folders, and links with nearby Apple devices and other Windows computers running AirDropd.
 
 Features included in this release:
 

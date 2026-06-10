@@ -20,6 +20,9 @@ pub struct DiscoveredDevice {
 	pub port: u16,
 	pub service_type: ServiceType,
 	pub txt_records: HashMap<String, String>,
+	/// BLE signal strength in dBm when the device is also seen over Bluetooth.
+	/// Used to approximate physical distance on the radar.
+	pub rssi: Option<i16>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -254,6 +257,7 @@ fn resolve_discovered_device(
 		port: info.get_port(),
 		service_type: service,
 		txt_records,
+		rssi: None,
 	})
 }
 

@@ -154,8 +154,14 @@ impl AirDropHttpServer {
                     false
                 }
                 ("POST", "/Ask") => {
-                    handle_ask(&mut tls_stream, &request, &config, incoming_transfer.clone())
-                        .await?;
+                    handle_ask(
+                        &mut tls_stream,
+                        &request,
+                        &config,
+                        incoming_transfer.clone(),
+                        received_tx.clone(),
+                    )
+                    .await?;
                     false
                 }
                 ("POST", "/Upload") => {
@@ -217,13 +223,16 @@ async fn handle_ask(
     request: &HttpRequest,
     config: &SharedConfig,
     incoming_transfer: Option<Arc<crate::protocols::incoming_transfer::IncomingTransferService>>,
+    received_tx: Option<tokio::sync::broadcast::Sender<PathBuf>>,
 ) -> Result<()> {
     let details = crate::protocols::incoming_transfer::parse_ask_request(&request.body)
         .unwrap_or_else(|_| crate::protocols::incoming_transfer::IncomingTransferDetails {
             sender_name: "Unknown device".to_string(),
             sender_model: "Apple device".to_string(),
             files: Vec::new(),
+            link: None,
         });
+    let link = details.link.clone();
 
     info!(
         "AirDrop /Ask from {} — {} file(s), awaiting decision",
@@ -242,6 +251,24 @@ async fn handle_ask(
         return Ok(());
     }
 
+    // Link shares have no /Upload step: persist the URL as an internet
+    // shortcut in the receive folder so the user can open it on their terms.
+    if let Some(url) = link {
+        let receive_dir = {
+            let cfg = config.read().map_err(|_| anyhow!("config lock poisoned"))?;
+            cfg.ensure_receive_dir()?
+        };
+        match save_link_shortcut(&receive_dir, &url) {
+            Ok(path) => {
+                info!("Saved shared link to {}", path.display());
+                if let Some(tx) = &received_tx {
+                    let _ = tx.send(path);
+                }
+            }
+            Err(e) => error!("Failed to save shared link: {}", e),
+        }
+    }
+
     let broadcast_name = config
         .read()
         .map(|c| c.broadcast_name.clone())
@@ -249,6 +276,24 @@ async fn handle_ask(
 
     let body = apple_plist::build_ask_response(&broadcast_name, RECEIVER_MODEL)?;
     write_response(stream, 200, &body, false).await
+}
+
+/// Write a Windows .url internet-shortcut file for a shared link.
+fn save_link_shortcut(dir: &std::path::Path, url: &str) -> Result<PathBuf> {
+    let host = url
+        .split("//")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("link")
+        .replace(|c: char| r#"<>:"/\|?*"#.contains(c), "_");
+    let mut path = dir.join(format!("{}.url", host));
+    let mut counter = 1;
+    while path.exists() {
+        path = dir.join(format!("{} ({}).url", host, counter));
+        counter += 1;
+    }
+    std::fs::write(&path, format!("[InternetShortcut]\r\nURL={}\r\n", url))?;
+    Ok(path)
 }
 
 async fn handle_upload(

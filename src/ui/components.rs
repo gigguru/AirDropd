@@ -3,8 +3,6 @@
 //! Questo modulo contiene componenti personalizzati per creare
 //! un'interfaccia utente coerente e moderna.
 
-pub mod error_dialog;
-
 use iced::{
     widget::{
         button, column, container, progress_bar, row, text, Button, Column, Container, ProgressBar,

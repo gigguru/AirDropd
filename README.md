@@ -12,11 +12,12 @@
 
 ## 📌 Overview
 
-**AirDropd** is a Windows application that implements Apple’s **AirDrop** and **AirPlay** protocols, allowing your PC to communicate and interact seamlessly with Apple devices.
+**AirDropd** is a Windows application that implements Apple’s **AirDrop** protocol, allowing your PC to exchange files, folders, and links with iPhones, iPads, Macs — and other AirDropd PCs.
 
 With AirDropd you can:
-- 📤 Share files using AirDrop
-- 📺 Stream your screen using AirPlay  
+- 📤 Send files, folders, and links to nearby Apple devices
+- 📥 Receive AirDrop transfers with an accept/decline prompt (or auto-accept)
+- 🖱️ Drag and drop files straight onto a device in the radar  
 All operations work **locally** over your network, without cloud or third-party services.
 
 ---
@@ -24,10 +25,12 @@ All operations work **locally** over your network, without cloud or third-party 
 ## ✨ Features
 
 - 🔁 **AirDrop**: Send and receive files between Windows PCs and Apple devices  
-- 🖥️ **AirPlay**: Stream your Windows screen to compatible Apple devices  
-- 📡 **Device Discovery**: Automatically discovers Apple devices using **mDNS**  
-- 🍏 **Native Integration**: Appears as a native Mac device on the network  
-- 🎨 **Modern Interface**: Clean and responsive UI
+- 📂 **Folder transfers**: Whole folders preserved with their structure  
+- 📡 **Distance radar**: Devices placed by Bluetooth signal strength, closest in the middle  
+- 🖱️ **Drag & drop**: Drop files on the window — they go to the selected device  
+- 🔍 **Device Discovery**: Automatic discovery via **mDNS** + **Bluetooth LE**  
+- 📊 **Live progress**: Real streamed uploads with progress reporting  
+- 🎨 **Modern Interface**: Clean, responsive macOS-style UI
 
 ---
 
@@ -70,21 +73,19 @@ cargo build --release --bin AirDropd
 
 ## ▶️ Usage
 
-1. Run the application **as administrator**  
-2. AirDropd will automatically start discovering nearby Apple devices  
-3. For **AirDrop**:
-   - Click on **“Send File”** to share files with nearby devices  
-4. For **AirPlay**:
-   - Click on **“Start Screen Streaming”** to broadcast your screen
+1. Run the application (allow the Windows Firewall ports when prompted)  
+2. AirDropd automatically discovers nearby Apple devices and shows them in the radar  
+3. **Send**: click a device, then *Send Files*, *Send Folder*, or *Send Link* — or just drag files onto the window  
+4. **Receive**: have the iPhone/Mac set AirDrop visibility to *Everyone*, send to your PC, and accept the prompt (files land in `Downloads\AirDropd`)  
+5. **DJ mode**: enable *Automatically accept incoming transfers* in Settings so guests' tracks save without interaction
 
 ---
 
 ## 🧠 Architecture
 
-- 🔍 **mDNS Discovery**: Uses multicast DNS to discover and advertise services  
-- 💾 **AirDrop Protocol**: Implements Apple’s protocol for peer-to-peer file transfer  
-- 📡 **AirPlay Engine**: Handles screen capturing and streaming  
-- 🧰 **UI**: Modern, responsive user interface (based on egui or custom UI)
+- 🔍 **mDNS + BLE Discovery**: Multicast DNS plus Bluetooth LE beacons for discovery and distance  
+- 💾 **AirDrop Protocol**: Apple-compatible HTTPS `/Discover → /Ask → /Upload` with binary plists and gzip cpio archives  
+- 🧰 **UI**: Modern, responsive user interface built with iced (canvas radar)
 
 ---
 

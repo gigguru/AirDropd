@@ -130,7 +130,7 @@ impl AboutView {
                     .style(styles::colors::TEXT_PRIMARY),
                 
                 // Sottotitolo
-                text("AirDrop & AirPlay for Windows")
+                text("AirDrop for Windows")
                     .size(16)
                     .style(styles::colors::TEXT_MUTED),
             ]
@@ -222,7 +222,7 @@ impl AboutView {
                 
                 Space::with_height(styles::spacing::MEDIUM),
                 
-                text("AirDropd brings Apple AirDrop and AirPlay to Windows, letting you share files, links, and media between Apple devices and your PC.")
+                text("AirDropd brings Apple AirDrop to Windows, letting you share files, folders, and links between Apple devices and your PC.")
                     .size(14)
                     .style(styles::colors::TEXT_PRIMARY),
                 
@@ -242,12 +242,12 @@ impl AboutView {
     /// Funzionalità principali
     fn features(&self, theme: &Theme) -> Element<Message> {
         let features_list = column![
-            (&self).feature_item("📁", "File Sharing", "Send and receive files via AirDrop", theme),
+            (&self).feature_item("📁", "File & Folder Sharing", "Send and receive files via AirDrop", theme),
             (&self).feature_item("🔗", "Link Sharing", "Share URLs and web links", theme),
-            (&self).feature_item("📺", "AirPlay Streaming", "Stream media to Apple devices", theme),
+            (&self).feature_item("📡", "Distance Radar", "Devices placed by Bluetooth signal strength", theme),
             (&self).feature_item("🔍", "Automatic Discovery", "Find compatible devices automatically", theme),
             (&self).feature_item("🔒", "Security", "Encrypted and secure communications", theme),
-            (&self).feature_item("⚡", "Performance", "Fast and reliable transfers", theme),
+            (&self).feature_item("⚡", "Performance", "Streamed transfers with live progress", theme),
         ]
         .spacing(styles::spacing::MEDIUM);
   

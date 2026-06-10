@@ -16,7 +16,6 @@ use network::ble::BleManager;
 use network::discovery::DeviceDiscovery;
 use network::mdns_hub::{self, SharedMdns};
 use protocols::airdrop::AirDrop;
-use protocols::airplay::AirPlay;
 use protocols::incoming_transfer::IncomingTransferService;
 use protocols::awdl::{AwdlManager, AwdlManagerConfig};
 use std::path::PathBuf;
@@ -27,11 +26,12 @@ pub struct AirDropdServices {
     pub mdns: SharedMdns,
     pub device_discovery: Arc<Mutex<DeviceDiscovery>>,
     pub airdrop: Arc<Mutex<AirDrop>>,
-    pub airplay: Arc<Mutex<AirPlay>>,
     pub ble: Arc<Mutex<BleManager>>,
     pub awdl: Arc<Mutex<AwdlManager>>,
     pub received_tx: tokio::sync::broadcast::Sender<PathBuf>,
     pub incoming_transfer: Arc<IncomingTransferService>,
+    /// Live outgoing-transfer progress (percent 0..=100) polled by the UI.
+    pub send_progress: protocols::airdrop_client::SendProgress,
 }
 
 impl AirDropdServices {
@@ -51,7 +51,6 @@ impl AirDropdServices {
             mdns.clone(),
             incoming_transfer.clone(),
         );
-        let airplay = AirPlay::new();
         let ble = BleManager::new().await?;
         let awdl = AwdlManager::new(AwdlManagerConfig::default());
 
@@ -60,11 +59,11 @@ impl AirDropdServices {
             mdns,
             device_discovery: Arc::new(Mutex::new(discovery)),
             airdrop: Arc::new(Mutex::new(airdrop)),
-            airplay: Arc::new(Mutex::new(airplay)),
             ble: Arc::new(Mutex::new(ble)),
             awdl: Arc::new(Mutex::new(awdl)),
             received_tx,
             incoming_transfer,
+            send_progress: Arc::new(std::sync::Mutex::new(None)),
         })
     }
 
@@ -77,11 +76,6 @@ impl AirDropdServices {
         {
             let airdrop = self.airdrop.lock().await;
             airdrop.start_server().await?;
-        }
-
-        {
-            let airplay = self.airplay.lock().await;
-            airplay.start_server().await?;
         }
 
         {

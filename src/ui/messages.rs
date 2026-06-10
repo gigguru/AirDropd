@@ -4,7 +4,6 @@
 //! nell'applicazione per gestire gli eventi e le azioni dell'utente.
 
 use crate::network::DiscoveredDevice;
-use crate::protocols::airplay::AirPlayStatus;
 use crate::protocols::airdrop::AirDropStatus;
 use std::path::PathBuf;
 
@@ -13,7 +12,6 @@ use std::path::PathBuf;
 pub enum Message {
     // Messaggi di sistema
     Tick,
-    WindowResized(u32, u32),
     ThemeChanged(crate::ui::Theme),
     InitializationComplete,
     SplashTick,
@@ -34,20 +32,20 @@ pub enum Message {
     // Messaggi di AirDrop
     AirDropStatusChanged(AirDropStatus),
     SendFile(DiscoveredDevice),
+    SendFolder(DiscoveredDevice),
     SendLink(DiscoveredDevice, String),
-    FileSelected(Option<PathBuf>),
     FileSendProgress(f32),
     FileSendCompleted(Result<(), String>),
-    
-    // Messaggi di AirPlay
-    AirPlayStatusChanged(AirPlayStatus),
-    StartScreenMirroring(DiscoveredDevice),
-    StopScreenMirroring,
-    ScreenMirroringFrame(Vec<u8>),
+
+    // Drag & drop of files/folders onto the window
+    FileDroppedOnWindow(PathBuf),
+    FilesHoveringWindow(bool),
+    ProcessDroppedFiles(u64),
+    ChooseRecipient(DiscoveredDevice),
+    ChooseRecipientWithFiles(DiscoveredDevice, Vec<PathBuf>),
+    CancelRecipientChooser,
     
     // Messaggi di interfaccia
-    ShowActionDialog(DiscoveredDevice),
-    HideActionDialog,
     ShowLinkDialog,
     HideLinkDialog,
     LinkInputChanged(String),
@@ -58,16 +56,9 @@ pub enum Message {
     
     // Messaggi di errore
     Error(String),
-    Warning(String),
     Info(String),
-    ClearError,
-    HideError,
     
     // Messaggi per le impostazioni
-    CustomPortChanged,
-    ToggleDebugMode,
-    LogLevelChanged,
-    MaxConcurrentTransfersChanged,
     OpenLogFolder,
     ClearCache,
     RunDiagnostics,
@@ -173,9 +164,7 @@ impl NotificationMessage {
 #[derive(Debug, Clone)]
 pub enum SubscriptionMessage {
     DeviceDiscoveryUpdate(Vec<DiscoveredDevice>),
-    AirPlayStatusUpdate(AirPlayStatus),
     AirDropStatusUpdate(AirDropStatus),
-    ScreenFrame(Vec<u8>),
     FileTransferProgress(f32),
 }
 
@@ -183,9 +172,7 @@ impl From<SubscriptionMessage> for Message {
     fn from(sub_msg: SubscriptionMessage) -> Self {
         match sub_msg {
             SubscriptionMessage::DeviceDiscoveryUpdate(devices) => Message::DevicesUpdated(devices),
-            SubscriptionMessage::AirPlayStatusUpdate(status) => Message::AirPlayStatusChanged(status),
             SubscriptionMessage::AirDropStatusUpdate(status) => Message::AirDropStatusChanged(status),
-            SubscriptionMessage::ScreenFrame(frame) => Message::ScreenMirroringFrame(frame),
             SubscriptionMessage::FileTransferProgress(progress) => Message::FileSendProgress(progress),
         }
     }
