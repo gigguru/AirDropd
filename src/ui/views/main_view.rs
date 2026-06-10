@@ -346,9 +346,14 @@ impl<'a> MainView<'a> {
         };
 
         let actions = column![
-            text(&device.name)
-                .size(13)
-                .style(styles::text_color(*theme)),
+            text(format!(
+                "{} {} · {}",
+                device.kind().emoji(),
+                device.name,
+                device.kind().label()
+            ))
+            .size(13)
+            .style(styles::text_color(*theme)),
             Space::with_height(8),
             row![
                 button(text("Send Files").size(12))
@@ -452,17 +457,18 @@ impl<'a> MainView<'a> {
             .cloned()
             .fold(column![].spacing(8).width(Length::Fill), |col, device| {
                 let reachable = !device.address.is_unspecified() && device.port > 0;
+                let kind = device.kind().label();
                 let subtitle = if reachable {
-                    "Ready to receive"
+                    format!("{} — Ready to receive", kind)
                 } else {
-                    "Bluetooth only — not reachable yet"
+                    format!("{} — Bluetooth only, not reachable yet", kind)
                 };
-                let icon = widgets::device_icon(&device.service_type);
+                let icon = widgets::device_icon(&device);
                 let msg = Message::ChooseRecipient(device.clone());
                 col.push(widgets::device_list_row(
                     &device.name,
                     icon,
-                    subtitle,
+                    &subtitle,
                     false,
                     iced_theme,
                     msg,

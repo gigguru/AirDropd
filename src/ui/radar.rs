@@ -104,11 +104,7 @@ fn hit_test(devices: &[DiscoveredDevice], bounds: Rectangle, cursor: Point) -> O
 }
 
 fn device_emoji(device: &DiscoveredDevice) -> &'static str {
-    match device.service_type {
-        crate::network::ServiceType::AirDrop => "📱",
-        crate::network::ServiceType::Companion => "💻",
-        _ => "💻",
-    }
+    device.kind().emoji()
 }
 
 #[derive(Default)]
@@ -315,17 +311,21 @@ impl<'a> Program<Message> for Radar<'a> {
                 vertical_alignment: alignment::Vertical::Top,
                 ..Default::default()
             });
-            if ble_only {
-                frame.fill_text(canvas::Text {
-                    content: "via Bluetooth".to_string(),
-                    position: Point::new(pos.x, pos.y + NODE_RADIUS + 17.0),
-                    color: muted,
-                    size: Pixels(9.0),
-                    horizontal_alignment: alignment::Horizontal::Center,
-                    vertical_alignment: alignment::Vertical::Top,
-                    ..Default::default()
-                });
-            }
+            // Device-type line, e.g. "iPhone" or "MacBook · Bluetooth".
+            let kind_line = if ble_only {
+                format!("{} · Bluetooth", device.kind().label())
+            } else {
+                device.kind().label().to_string()
+            };
+            frame.fill_text(canvas::Text {
+                content: kind_line,
+                position: Point::new(pos.x, pos.y + NODE_RADIUS + 17.0),
+                color: muted,
+                size: Pixels(9.0),
+                horizontal_alignment: alignment::Horizontal::Center,
+                vertical_alignment: alignment::Vertical::Top,
+                ..Default::default()
+            });
         }
 
         // Empty-state hint inside the radar.

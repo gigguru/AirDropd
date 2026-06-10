@@ -15,6 +15,10 @@ use tokio_native_tls::{native_tls, TlsConnector};
 
 const SENDER_MODEL: &str = "Windows,1";
 const UPLOAD_CHUNK: usize = 65536;
+/// TCP connect timeout: keeps the UI responsive when a device left the network.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// iPhones waking AWDL/Wi-Fi often refuse the first connection attempt.
+const DISCOVER_ATTEMPTS: u32 = 3;
 
 /// Shared send-progress slot: `Some(percent 0..=100)` while a transfer runs.
 pub type SendProgress = Arc<StdMutex<Option<f32>>>;
@@ -98,13 +102,9 @@ impl AirDropClient {
             "SenderComputerName".to_string(),
             Value::String(hostname.clone()),
         );
-        post_on_new_connection(
-            target,
-            "/Discover",
-            &encode_plist(&discover)?,
-            "application/octet-stream",
-        )
-        .await?;
+        post_discover_with_retry(target, &encode_plist(&discover)?)
+            .await
+            .context("receiver did not answer /Discover")?;
 
         // 2. /Ask — request consent, listing every file.
         let ask = build_ask_plist(&hostname, sender_id, &entries, None)?;
@@ -150,13 +150,9 @@ impl AirDropClient {
             "SenderComputerName".to_string(),
             Value::String(hostname.clone()),
         );
-        post_on_new_connection(
-            target,
-            "/Discover",
-            &encode_plist(&discover)?,
-            "application/octet-stream",
-        )
-        .await?;
+        post_discover_with_retry(target, &encode_plist(&discover)?)
+            .await
+            .context("receiver did not answer /Discover")?;
 
         let ask = build_ask_plist(&hostname, sender_id, &[], Some(url))?;
         post_on_new_connection(target, "/Ask", &ask, "application/octet-stream")
@@ -385,6 +381,14 @@ fn pad_writer<W: Write>(out: &mut W, datasize: usize) -> Result<()> {
     Ok(())
 }
 
+/// TCP connect with a hard timeout so unreachable devices fail fast.
+async fn connect_with_timeout(target: SocketAddr) -> Result<TcpStream> {
+    tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(target))
+        .await
+        .map_err(|_| anyhow!("connection to {} timed out", target))?
+        .with_context(|| format!("connect to {}", target))
+}
+
 async fn post_on_new_connection(
     target: SocketAddr,
     path: &str,
@@ -392,9 +396,25 @@ async fn post_on_new_connection(
     content_type: &str,
 ) -> Result<Vec<u8>> {
     let connector = tls_connector()?;
-    let stream = TcpStream::connect(target).await?;
+    let stream = connect_with_timeout(target).await?;
     let mut tls = connector.connect("AirDrop", stream).await?;
     post_raw(&mut tls, path, body, content_type).await
+}
+
+/// POST /Discover with retries — iPhones bringing their AWDL/Wi-Fi radio up
+/// frequently reject the first connection, then accept moments later.
+async fn post_discover_with_retry(target: SocketAddr, body: &[u8]) -> Result<Vec<u8>> {
+    let mut last_err = None;
+    for attempt in 0..DISCOVER_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(300 * (1 << attempt))).await;
+        }
+        match post_on_new_connection(target, "/Discover", body, "application/octet-stream").await {
+            Ok(response) => return Ok(response),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow!("discover failed")))
 }
 
 /// Stream the archive file as a chunked /Upload, reporting progress.
@@ -406,7 +426,7 @@ async fn post_upload_streamed(
     let total = tokio::fs::metadata(archive_path).await?.len().max(1);
 
     let connector = tls_connector()?;
-    let stream = TcpStream::connect(target).await?;
+    let stream = connect_with_timeout(target).await?;
     let mut tls = connector.connect("AirDrop", stream).await?;
 
     let request = "POST /Upload HTTP/1.1\r\n\

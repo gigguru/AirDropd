@@ -1,7 +1,7 @@
-//! Widget personalizzati per l'interfaccia utente AirDropd
+//! Custom widgets for the AirDropd user interface.
 //!
-//! Questo modulo contiene widget personalizzati e riutilizzabili
-//! per creare un'esperienza utente coerente e moderna.
+//! This module contains custom, reusable widgets for building a consistent,
+//! modern user experience.
 
 use iced::{
     widget::{
@@ -15,7 +15,7 @@ use iced::{
 use crate::ui::messages::Message;
 use crate::ui::styles;
 
-/// Widget per visualizzare lo stato di connessione
+/// Connection status widget.
 pub fn connection_status<'a>(
     is_connected: bool,
     device_name: Option<&str>,
@@ -62,7 +62,7 @@ pub fn connection_status<'a>(
     .into()
 }
 
-/// Widget per visualizzare il progresso di trasferimento
+/// Transfer progress widget.
 pub fn transfer_progress<'a>(
     progress: f32,
     file_name: &str,
@@ -132,7 +132,7 @@ pub fn transfer_progress<'a>(
         .into()
 }
 
-/// Widget per visualizzare le statistiche di rete
+/// Network statistics widget.
 pub fn network_stats<'a>(
     upload_speed: &str,
     download_speed: &str,
@@ -179,7 +179,7 @@ pub fn network_stats<'a>(
         .into()
 }
 
-/// Widget per visualizzare un badge di stato
+/// Status badge widget.
 pub fn status_badge<'a>(
     text_content: &str,
     badge_type: BadgeType,
@@ -208,7 +208,7 @@ pub fn status_badge<'a>(
     .into()
 }
 
-/// Tipi di badge disponibili
+/// Available badge types.
 #[derive(Debug, Clone, Copy)]
 pub enum BadgeType {
     Success,
@@ -218,7 +218,7 @@ pub enum BadgeType {
     Neutral,
 }
 
-/// Widget per visualizzare un separatore con testo
+/// Text separator widget.
 pub fn text_separator<'a>(
     text_content: &str,
     _theme: &IcedTheme,
@@ -239,17 +239,17 @@ pub fn text_separator<'a>(
     .into()
 }
 
-/// Widget per visualizzare un tooltip informativo
+/// Informational tooltip widget.
 pub fn info_tooltip<'a>(
     content: Element<'a, Message>,
     _tooltip_text: &str,
     _theme: &IcedTheme,
 ) -> Element<'a, Message> {
-    // Per ora restituiamo solo il contenuto, in futuro si può implementare un vero tooltip
+    // Return the content for now; a real tooltip can be added later.
     content
 }
 
-/// Widget per creare un layout a griglia responsive
+/// Responsive grid layout widget.
 pub fn responsive_grid<'a>(
     items: Vec<Element<'a, Message>>,
     columns: usize,
@@ -275,7 +275,7 @@ pub fn responsive_grid<'a>(
         .into()
 }
 
-/// Widget per creare un header di sezione
+/// Section header widget.
 pub fn section_header<'a>(
     title: &str,
     subtitle: Option<&str>,
@@ -402,16 +402,12 @@ pub fn device_list_row<'a>(
     .into()
 }
 
-/// Returns the appropriate device icon for a service type
-pub fn device_icon(service_type: &crate::network::ServiceType) -> &'static str {
-    match service_type {
-        crate::network::ServiceType::AirDrop => "📱",
-        crate::network::ServiceType::AirPlay => "📺",
-        _ => "💻",
-    }
+/// Returns the device-type icon (iPhone, MacBook, …) for a discovered device.
+pub fn device_icon(device: &crate::network::DiscoveredDevice) -> &'static str {
+    device.kind().emoji()
 }
 
-/// Widget per creare un pannello collassabile
+/// Collapsible panel widget.
 pub fn collapsible_panel<'a>(
     title: &str,
     is_expanded: bool,

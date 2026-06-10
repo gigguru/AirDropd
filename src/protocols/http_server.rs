@@ -16,6 +16,32 @@ use super::tls_store;
 
 const RECEIVER_MODEL: &str = "Windows,1";
 
+/// Bind a dual-stack (IPv6 + IPv4) listener so iPhones — which prefer IPv6 —
+/// can connect either way. Falls back to IPv4-only if dual-stack fails.
+async fn bind_dual_stack(port: u16) -> Result<TcpListener> {
+    let dual = || -> Result<TcpListener> {
+        use socket2::{Domain, Protocol, Socket, Type};
+        let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+        socket.set_only_v6(false)?;
+        socket.set_reuse_address(true)?;
+        let addr: SocketAddr = format!("[::]:{}", port).parse()?;
+        socket.bind(&addr.into())?;
+        socket.listen(128)?;
+        socket.set_nonblocking(true)?;
+        Ok(TcpListener::from_std(socket.into())?)
+    };
+    match dual() {
+        Ok(listener) => {
+            info!("Listening dual-stack (IPv4 + IPv6) on port {}", port);
+            Ok(listener)
+        }
+        Err(e) => {
+            info!("Dual-stack bind failed ({}); falling back to IPv4-only", e);
+            Ok(TcpListener::bind(("0.0.0.0", port)).await?)
+        }
+    }
+}
+
 /// HTTP/HTTPS server implementing Apple AirDrop binary-plist protocol.
 pub struct AirDropHttpServer {
     port: u16,
@@ -78,7 +104,7 @@ impl AirDropHttpServer {
             .as_ref()
             .ok_or_else(|| anyhow!("TLS acceptor not initialized"))?;
 
-        let listener = TcpListener::bind(("0.0.0.0", self.port)).await?;
+        let listener = bind_dual_stack(self.port).await?;
         info!("AirDrop HTTPS server listening on port {}", self.port);
 
         *self.running.lock().await = true;

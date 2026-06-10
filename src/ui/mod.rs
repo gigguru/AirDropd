@@ -1,7 +1,7 @@
-//! Modulo principale dell'interfaccia utente Iced
+//! Main Iced user-interface module.
 //!
-//! Questo modulo contiene l'implementazione completa dell'interfaccia utente
-//! utilizzando la libreria Iced, con design moderno e reattivo.
+//! This module contains the complete Iced UI implementation with a modern,
+//! responsive design.
 
 use iced::{
     executor,
@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-// Moduli pub mod app;
+// UI modules.
 pub mod components;
 pub mod assets;
 pub mod messages;
@@ -25,10 +25,22 @@ pub mod tray;
 pub mod views;
 pub mod widgets;
 
-// Re-export dei tipi principali
+// Re-export main message type.
 pub use messages::Message;
+
+/// How long a /Discover probe result stays valid before re-probing a device.
+const PROBE_CACHE_TTL: Duration = Duration::from_secs(300);
+
+type ProbeNameCache =
+    std::sync::Mutex<HashMap<String, (std::time::Instant, Option<String>)>>;
+
+/// Cache of /Discover probe results keyed by `ip:port`.
+fn probe_name_cache() -> &'static ProbeNameCache {
+    static CACHE: std::sync::OnceLock<ProbeNameCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
  
-/// Tema dell'applicazione (utilizzato da `styles` per gli stili personalizzati)
+/// Application theme, used by `styles` for custom styling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
     #[default]
@@ -36,54 +48,54 @@ pub enum Theme {
     Light,
 }
  
-/// Struttura principale dell'applicazione AirDropd
+/// Main AirDropd application state.
 pub struct AirDropdApp {
     /// Background services (mDNS, BLE, AirDrop server)
     services: Arc<crate::AirDropdServices>,
 
-    /// Stato corrente dell'applicazione
+    /// Current application view
     current_view: AppView,
     
-    /// Dispositivi scoperti nella rete
+    /// Discovered network devices
     discovered_devices: Vec<crate::network::DiscoveredDevice>,
     
-    /// Dispositivo attualmente selezionato
+    /// Currently selected device
     selected_device: Option<crate::network::DiscoveredDevice>,
     
-    /// Stato della scansione
+    /// Scanning state
     is_scanning: bool,
     
-    /// Stato AirDrop
+    /// AirDrop status
     airdrop_status: crate::protocols::airdrop::AirDropStatus,
     
-    /// Progresso del trasferimento file (0.0-100.0)
+    /// File-transfer progress (0.0-100.0)
     file_transfer_progress: Option<f32>,
     
-    /// Notificazioni attive
+    /// Active notifications
     notifications: Vec<messages::NotificationMessage>,
     
-    /// Tema corrente
+    /// Current theme
     theme: Theme,
     
     /// Discovery visibility (macOS AirDrop-style)
     discovery_visibility: views::settings_view::AirDropVisibility,
     
-    /// Vista impostazioni persistita per evitare problemi di lifetime
+    /// Persisted settings view to avoid lifetime issues
     settings_view: views::settings_view::SettingsView,
     
-    /// Vista informazioni persistita per evitare problemi di lifetime
+    /// Persisted about view to avoid lifetime issues
     about_view: views::about_view::AboutView,
     
-    /// Stato del dialog per l'invio di link
+    /// Link-send dialog state
     show_link_dialog: bool,
     
-    /// URL da inviare tramite link
+    /// URL to send as a link
     link_url: String,
     
-    /// Stato di caricamento generale
+    /// General loading state
     is_loading: bool,
     
-    /// Messaggio di stato
+    /// Status message
     status_message: String,
 
     /// Main window hidden in system tray
@@ -113,16 +125,16 @@ pub struct AirDropdApp {
     pending_recipient_files: Option<Vec<std::path::PathBuf>>,
 }
 
-/// Viste disponibili nell'applicazione
+/// Available application views.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppView {
-    /// Vista principale con lista dispositivi e pannello azioni
+    /// Main view with nearby devices and action panel
     Main,
-    /// Vista delle impostazioni
+    /// Settings view
     Settings,
-    /// Vista informazioni sull'app
+    /// About view
     About,
-    /// Vista di caricamento iniziale
+    /// Initial loading view
     Loading,
     /// Startup splash with branded icon animation
     Splash,
@@ -299,7 +311,7 @@ impl Application for AirDropdApp {
                 self.is_loading = false;
                 self.status_message = "Ready".to_string();
                 
-                // Avvia la scansione automatica
+                // Start automatic scanning.
                 Command::perform(
                     async { () },
                     |_| Message::StartScanning,
@@ -507,7 +519,7 @@ impl Application for AirDropdApp {
             Message::ShowNotification(notification) => {
                 self.notifications.push(notification);
                 
-                // Auto-rimuovi notifica dopo 5 secondi
+                // Automatically remove the notification after 5 seconds.
                 Command::perform(
                     async {
                         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -1010,13 +1022,17 @@ impl Application for AirDropdApp {
 
     fn subscription(&self) -> Subscription<Self::Message> {
         let refresh_secs = if self.is_scanning { 2 } else { 4 };
-        let refresh = if matches!(self.current_view, AppView::Main) {
+        // No discovery refreshes or radar redraws while minimized to tray.
+        let refresh = if matches!(self.current_view, AppView::Main) && !self.window_hidden {
             time::every(Duration::from_secs(refresh_secs)).map(|_| Message::RefreshDevices)
         } else {
             Subscription::none()
         };
 
-        let sonar = if matches!(self.current_view, AppView::Main) && self.is_scanning {
+        let sonar = if matches!(self.current_view, AppView::Main)
+            && self.is_scanning
+            && !self.window_hidden
+        {
             time::every(Duration::from_millis(120)).map(|_| Message::SonarTick)
         } else {
             Subscription::none()
@@ -1073,12 +1089,12 @@ impl Application for AirDropdApp {
 }
 
 impl AirDropdApp {
-    /// Vista di caricamento
+    /// Loading view.
     fn loading_view(&self) -> Element<Message> {
         components::loading_state(&self.status_message)
     }
 
-    /// Vista principale dell'applicazione
+    /// Main application view.
     fn main_view(&self) -> Element<Message> {
         views::main_view::render(
             &self.discovered_devices,
@@ -1098,17 +1114,21 @@ impl AirDropdApp {
         )
     }
  
-    /// Vista impostazioni
+    /// Settings view.
     fn settings_view(&self) -> Element<Message> {
         self.settings_view.view(&self.theme)
     }
 
-    /// Vista informazioni
+    /// About view.
     fn about_view(&self) -> Element<Message> {
         self.about_view.view(&self.theme)
     }
   
     /// Fetch discovered Apple devices from mDNS and BLE.
+    ///
+    /// /Discover probe results are cached per endpoint: each probe opens a
+    /// TLS connection, so re-probing every refresh tick would hammer nearby
+    /// devices and slow the UI loop down.
     async fn fetch_devices(
         services: Arc<crate::AirDropdServices>,
     ) -> Vec<crate::network::DiscoveredDevice> {
@@ -1137,6 +1157,8 @@ impl AirDropdApp {
                 })
                 .collect();
 
+            let cache = probe_name_cache();
+            let mut resolved: Vec<(usize, String)> = Vec::new();
             let mut probe_futures = Vec::new();
             for (idx, device) in collected.iter().enumerate() {
                 if matches!(
@@ -1146,6 +1168,20 @@ impl AirDropdApp {
                     && !device.address.is_unspecified()
                 {
                     let addr = std::net::SocketAddr::new(device.address, device.port);
+                    let cache_key = addr.to_string();
+
+                    let cached = cache.lock().ok().and_then(|c| {
+                        c.get(&cache_key).and_then(|(probed_at, name)| {
+                            (probed_at.elapsed() < PROBE_CACHE_TTL).then(|| name.clone())
+                        })
+                    });
+                    if let Some(name) = cached {
+                        if let Some(name) = name {
+                            resolved.push((idx, name));
+                        }
+                        continue;
+                    }
+
                     probe_futures.push(async move {
                         let name = tokio::time::timeout(
                             Duration::from_millis(1500),
@@ -1155,15 +1191,22 @@ impl AirDropdApp {
                         .ok()
                         .and_then(|r| r.ok())
                         .flatten();
-                        (idx, name)
+                        (idx, cache_key, name)
                     });
                 }
             }
 
-            for (idx, name) in futures::future::join_all(probe_futures).await {
-                if let Some(name) = name {
-                    collected[idx].name = name;
+            for (idx, cache_key, name) in futures::future::join_all(probe_futures).await {
+                if let Ok(mut c) = cache.lock() {
+                    c.insert(cache_key, (std::time::Instant::now(), name.clone()));
                 }
+                if let Some(name) = name {
+                    resolved.push((idx, name));
+                }
+            }
+
+            for (idx, name) in resolved {
+                collected[idx].name = name;
             }
 
             for device in collected {
@@ -1226,10 +1269,18 @@ impl AirDropdApp {
                 .entry(key)
                 .and_modify(|existing| {
                     let rssi = device.rssi.or(existing.rssi);
+                    // Merge TXT records from every advertisement: the hardware
+                    // model (used for the device-type icon) often comes from a
+                    // different service than the one we keep for transfers.
+                    let mut txt = existing.txt_records.clone();
+                    for (k, v) in &device.txt_records {
+                        txt.entry(k.clone()).or_insert_with(|| v.clone());
+                    }
                     if rank(&device) < rank(existing) {
                         *existing = device.clone();
                     }
                     existing.rssi = rssi;
+                    existing.txt_records = txt;
                 })
                 .or_insert(device);
         }
@@ -1320,7 +1371,7 @@ impl AirDropdApp {
         )
     }
 
-    /// Aggiunge una notifica alla lista
+    /// Add a notification to the list.
     fn add_notification(
         &mut self,
         title: String,
@@ -1336,7 +1387,7 @@ impl AirDropdApp {
         
         self.notifications.push(notification);
         
-        // Mantieni solo le ultime 5 notifiche
+        // Keep only the latest 5 notifications.
         if self.notifications.len() > 5 {
             self.notifications.remove(0);
         }
@@ -1378,7 +1429,7 @@ fn open_url(url: &str) -> Result<(), String> {
     }
 }
 
-/// Funzione principale per avviare l'applicazione
+/// Main function for starting the application.
 pub fn run(services: Arc<crate::AirDropdServices>) -> iced::Result {
     // Prefer DirectX 12 backend on Windows to avoid Vulkan validation spam
     // and disable extra WGPU validation layers in release usage.
@@ -1408,7 +1459,7 @@ pub fn run(services: Arc<crate::AirDropdServices>) -> iced::Result {
     })
 }
 
-/// Avvia l'applicazione AirDropd con i servizi forniti
+/// Start the AirDropd application with the provided services.
 pub async fn run_app(
     _services: std::sync::Arc<crate::AirDropdServices>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1439,7 +1490,7 @@ pub async fn run_app(
     Ok(())
 }
 
-/// Macro di utilità per creare elementi con spaziatura
+/// Utility macro for creating elements with spacing.
 #[macro_export]
 macro_rules! spaced {
     ($spacing:expr, $($element:expr),+ $(,)?) => {
@@ -1447,7 +1498,7 @@ macro_rules! spaced {
     };
 }
 
-/// Macro di utilità per creare righe con spaziatura
+/// Utility macro for creating rows with spacing.
 #[macro_export]
 macro_rules! spaced_row {
     ($spacing:expr, $($element:expr),+ $(,)?) => {

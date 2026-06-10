@@ -25,6 +25,136 @@ pub struct DiscoveredDevice {
 	pub rssi: Option<i16>,
 }
 
+/// Physical device category, derived from mDNS TXT records and the name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceKind {
+	IPhone,
+	IPad,
+	IPod,
+	MacBook,
+	MacDesktop,
+	AppleWatch,
+	AppleTv,
+	WindowsPc,
+	Unknown,
+}
+
+impl DeviceKind {
+	/// Short human-readable label, e.g. "iPhone" or "MacBook".
+	pub fn label(&self) -> &'static str {
+		match self {
+			DeviceKind::IPhone => "iPhone",
+			DeviceKind::IPad => "iPad",
+			DeviceKind::IPod => "iPod",
+			DeviceKind::MacBook => "MacBook",
+			DeviceKind::MacDesktop => "Mac",
+			DeviceKind::AppleWatch => "Apple Watch",
+			DeviceKind::AppleTv => "Apple TV",
+			DeviceKind::WindowsPc => "Windows PC",
+			DeviceKind::Unknown => "Apple device",
+		}
+	}
+
+	/// Icon used on the radar and in device lists.
+	pub fn emoji(&self) -> &'static str {
+		match self {
+			DeviceKind::IPhone => "📱",
+			DeviceKind::IPad => "📱",
+			DeviceKind::IPod => "🎵",
+			DeviceKind::MacBook => "💻",
+			DeviceKind::MacDesktop => "🖥",
+			DeviceKind::AppleWatch => "⌚",
+			DeviceKind::AppleTv => "📺",
+			DeviceKind::WindowsPc => "🪟",
+			DeviceKind::Unknown => "📡",
+		}
+	}
+}
+
+/// Map an Apple hardware identifier ("iPhone14,2", "MacBookPro18,1", "J274AP")
+/// to a device category.
+fn kind_from_model(model: &str) -> Option<DeviceKind> {
+	let m = model.trim();
+	if m.is_empty() {
+		return None;
+	}
+	let ml = m.to_ascii_lowercase();
+	if ml.starts_with("windows") {
+		return Some(DeviceKind::WindowsPc);
+	}
+	if ml.starts_with("iphone") {
+		return Some(DeviceKind::IPhone);
+	}
+	if ml.starts_with("ipad") {
+		return Some(DeviceKind::IPad);
+	}
+	if ml.starts_with("ipod") {
+		return Some(DeviceKind::IPod);
+	}
+	if ml.starts_with("watch") {
+		return Some(DeviceKind::AppleWatch);
+	}
+	if ml.starts_with("appletv") || ml.starts_with("audioaccessory") {
+		return Some(DeviceKind::AppleTv);
+	}
+	if ml.starts_with("macbook") {
+		return Some(DeviceKind::MacBook);
+	}
+	if ml.starts_with("imac")
+		|| ml.starts_with("macmini")
+		|| ml.starts_with("macstudio")
+		|| ml.starts_with("macpro")
+		|| ml.starts_with("mac1")
+		|| ml.starts_with("virtualmac")
+	{
+		return Some(DeviceKind::MacDesktop);
+	}
+	if ml.starts_with("mac") {
+		return Some(DeviceKind::MacDesktop);
+	}
+	None
+}
+
+impl DiscoveredDevice {
+	/// Best-effort device category from TXT records, falling back to the name.
+	pub fn kind(&self) -> DeviceKind {
+		// Hardware identifiers from _device-info (model), companion-link
+		// (rpMd), and AirPlay (model) advertisements.
+		for key in ["model", "rpMd", "am", "usb_mdl"] {
+			if let Some(kind) = self
+				.txt_records
+				.get(key)
+				.and_then(|model| kind_from_model(model))
+			{
+				return kind;
+			}
+		}
+
+		let name = self.name.to_ascii_lowercase();
+		if name.contains("iphone") {
+			DeviceKind::IPhone
+		} else if name.contains("ipad") {
+			DeviceKind::IPad
+		} else if name.contains("macbook") {
+			DeviceKind::MacBook
+		} else if name.contains("imac")
+			|| name.contains("mac mini")
+			|| name.contains("mac studio")
+			|| name.contains("mac pro")
+		{
+			DeviceKind::MacDesktop
+		} else if name.contains("watch") {
+			DeviceKind::AppleWatch
+		} else if name.contains("apple tv") {
+			DeviceKind::AppleTv
+		} else if name.contains("pc") || name.contains("windows") || name.contains("desktop") {
+			DeviceKind::WindowsPc
+		} else {
+			DeviceKind::Unknown
+		}
+	}
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ServiceType {
 	AirPlay,
