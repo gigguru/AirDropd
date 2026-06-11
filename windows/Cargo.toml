@@ -1,0 +1,16 @@
+[package]
+name = "airdropd-windows"
+version = "0.1.0"
+edition = "2021"
+description = "AirDropd for Windows — QR Web Drop and DJ Mode"
+authors = ["Rhythmic Records"]
+license = "Proprietary"
+autobins = false
+build = "build.rs"
+
+[[bin]]
+name = "AirDropd"
+path = "src/main.rs"
+
+[dependencies]
+airdropd-core = { path = "../core" }

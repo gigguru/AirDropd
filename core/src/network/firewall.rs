@@ -23,6 +23,11 @@ pub const AIRDROP_PORTS: &[FirewallPort] = &[
         label: "AirDrop file transfers (HTTPS)",
     },
     FirewallPort {
+        protocol: "TCP",
+        port: 8771,
+        label: "Web Drop (QR phone uploads)",
+    },
+    FirewallPort {
         protocol: "UDP",
         port: 5353,
         label: "Device discovery (mDNS)",

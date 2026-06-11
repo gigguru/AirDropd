@@ -1,16 +1,17 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![warn(unused_imports, unused_mut)]
 #![allow(dead_code, mismatched_lifetime_syntaxes)]
 
+use std::path::PathBuf;
 use std::sync::Arc;
+
 use tokio::sync::Mutex;
 
-mod activity;
-mod config;
-mod network;
-mod protocols;
-mod ui;
-mod utils;
+pub mod activity;
+pub mod config;
+pub mod network;
+pub mod protocols;
+pub mod ui;
+pub mod utils;
 
 use config::{shared, AppConfig};
 use network::ble::BleManager;
@@ -19,7 +20,6 @@ use network::mdns_hub::{self, SharedMdns};
 use protocols::airdrop::AirDrop;
 use protocols::incoming_transfer::IncomingTransferService;
 use protocols::awdl::{AwdlManager, AwdlManagerConfig};
-use std::path::PathBuf;
 
 /// Core background services for AirDropd.
 pub struct AirDropdServices {
@@ -31,6 +31,8 @@ pub struct AirDropdServices {
     pub awdl: Arc<Mutex<AwdlManager>>,
     pub received_tx: tokio::sync::broadcast::Sender<PathBuf>,
     pub incoming_transfer: Arc<IncomingTransferService>,
+    /// Local QR-based browser upload receiver (no app, no internet).
+    pub web_drop: Arc<protocols::webdrop::WebDropServer>,
     /// Live outgoing-transfer progress (percent 0..=100) polled by the UI.
     pub send_progress: protocols::airdrop_client::SendProgress,
 }
@@ -54,6 +56,11 @@ impl AirDropdServices {
         );
         let ble = BleManager::new().await?;
         let awdl = AwdlManager::new(AwdlManagerConfig::default());
+        let web_drop = Arc::new(protocols::webdrop::WebDropServer::new(
+            protocols::webdrop::WEB_DROP_PORT,
+            app_config.clone(),
+            received_tx.clone(),
+        ));
 
         Ok(Self {
             config: app_config,
@@ -64,6 +71,7 @@ impl AirDropdServices {
             awdl: Arc::new(Mutex::new(awdl)),
             received_tx,
             incoming_transfer,
+            web_drop,
             send_progress: Arc::new(std::sync::Mutex::new(None)),
         })
     }
@@ -77,6 +85,10 @@ impl AirDropdServices {
         {
             let airdrop = self.airdrop.lock().await;
             airdrop.start_server().await?;
+        }
+
+        if let Err(e) = self.web_drop.start().await {
+            tracing::warn!("Web Drop server failed to start: {}", e);
         }
 
         {
@@ -171,7 +183,8 @@ fn init_logging() {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// Start the AirDropd GUI and background services.
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
 
     let cfg = AppConfig::load();

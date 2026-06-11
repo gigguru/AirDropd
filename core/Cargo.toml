@@ -1,0 +1,83 @@
+[package]
+name = "airdropd-core"
+version = "0.1.0"
+edition = "2021"
+description = "Shared AirDropd library — protocols, UI, and services"
+authors = ["Rhythmic Records"]
+license = "Proprietary"
+build = "build.rs"
+
+[lib]
+name = "airdropd_core"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1.28", features = ["full"] }
+mdns-sd = { version = "0.7.5", features = ["async"] }
+iced = { version = "0.12", features = ["tokio", "image", "svg", "canvas"] }
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
+if-addrs = "0.10.1"
+local-ip-address = "0.5.1"
+socket2 = { version = "0.5", features = ["all"] }
+futures = "0.3"
+tokio-stream = { version = "0.1", features = ["net"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.3", features = ["v4", "serde"] }
+mime_guess = "2.0"
+image = { version = "0.24", default-features = false, features = ["png"] }
+qrcode = { version = "0.14", default-features = false }
+hostname = "0.3"
+rfd = { version = "0.15", default-features = false, features = ["tokio"] }
+rcgen = "0.12"
+tokio-rustls = "0.23"
+rustls = "0.21"
+tokio-native-tls = "0.3"
+native-tls = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+btleplug = "0.11"
+sha2 = "0.10"
+hmac = "0.12"
+rand = "0.8"
+hex = "0.4"
+owdl = { path = "../OWDL", package = "OWDL" }
+bytes = { version = "1.0", features = ["serde"] }
+byteorder = "1.4"
+env_logger = "0.10"
+clap = { version = "4.0", features = ["derive"] }
+hashbrown = "0.14"
+indexmap = "2.0"
+async-trait = "0.1"
+toml = "0.8"
+serde_yaml = "0.9"
+ring = "0.17"
+num_cpus = "1.0"
+bincode = "1.3"
+plist = "1.7"
+flate2 = "1.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tray-icon = { version = "0.19", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.48", features = [
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_System_LibraryLoader",
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Devices_Bluetooth",
+    "Devices_Bluetooth_Advertisement",
+    "Foundation",
+    "Foundation_Collections",
+    "Storage_Streams",
+] }
+
+[build-dependencies]
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"

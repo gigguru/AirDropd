@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -C target-feature=+crt-static
+
+jobs:
+  build-macos:
+    name: macOS AirDropd.app
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Build and zip AirDropd.app
+        run: |
+          chmod +x apple/build-macos.sh
+          ./apple/build-macos.sh
+          ls -la dist/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: AirDropd-macos-aarch64
+          path: dist/AirDropd-macos-arm64.zip
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows executables
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - run: cargo build --release --manifest-path windows/Cargo.toml
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+      - name: Build installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "windows\installer\AirDropd.iss"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: AirDropd-windows-x86_64
+          path: |
+            target/release/AirDropd.exe
+            dist/AirDropd Setup.exe
+          if-no-files-found: error
+
+  publish:
+    name: GitHub Release
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          cp artifacts/AirDropd-macos-aarch64/AirDropd-macos-arm64.zip release/
+          cp artifacts/AirDropd-windows-x86_64/AirDropd.exe release/
+          cp "artifacts/AirDropd-windows-x86_64/AirDropd Setup.exe" release/
+          ls -la release/
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v0.1.0-build-{0}', github.run_number) }}
+          name: AirDropd ${{ github.ref_type == 'tag' && github.ref_name || format('v0.1.0 build {0}', github.run_number) }}
+          draft: ${{ github.ref_type != 'tag' }}
+          prerelease: ${{ github.ref_type != 'tag' }}
+          generate_release_notes: true
+          files: |
+            release/AirDropd-macos-arm64.zip
+            release/AirDropd.exe
+            release/AirDropd Setup.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

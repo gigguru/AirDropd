@@ -19,6 +19,7 @@ use std::time::Duration;
 pub mod components;
 pub mod assets;
 pub mod messages;
+pub mod qr;
 pub mod radar;
 pub mod styles;
 pub mod tray;
@@ -111,6 +112,8 @@ pub struct AirDropdApp {
 
     /// Main window hidden in system tray
     window_hidden: bool,
+    /// System tray/menu-bar icon initialized (deferred until GUI loop is up).
+    tray_initialized: bool,
 
     /// Subscription to incoming file notifications
     received_rx: Option<tokio::sync::broadcast::Receiver<std::path::PathBuf>>,
@@ -134,6 +137,18 @@ pub struct AirDropdApp {
 
     /// Dropped files waiting for the user to pick a recipient
     pending_recipient_files: Option<Vec<std::path::PathBuf>>,
+
+    /// Cached Web Drop URL + QR image (recomputed when opening the screen)
+    web_drop_url: Option<String>,
+    web_drop_qr: Option<iced::widget::image::Handle>,
+    /// Large QR for DJ mode (separate cache so toggling views stays fast)
+    dj_qr: Option<iced::widget::image::Handle>,
+
+    /// Files received during the current DJ mode session
+    dj_files_received: u32,
+    dj_last_file: Option<String>,
+    /// Restore AirDrop auto-accept when leaving DJ mode
+    dj_saved_auto_accept: Option<bool>,
 }
 
 /// Available application views.
@@ -143,6 +158,10 @@ pub enum AppView {
     Main,
     /// Live Activity protocol-event feed
     Activity,
+    /// QR-based Web Drop receive screen
+    WebDrop,
+    /// Full-screen DJ receive mode (large QR + auto-save)
+    DjMode,
     /// Settings view
     Settings,
     /// About view
@@ -171,11 +190,8 @@ impl Application for AirDropdApp {
             .read()
             .map(|c| c.clone())
             .unwrap_or_default();
-        let tray_name = cfg.broadcast_name.clone();
         let settings_view = views::settings_view::SettingsView::from_config(&cfg);
         let received_rx = services.received_tx.subscribe();
-
-        let _ = tray::init_tray(&format!("AirDropd — {}", tray_name));
 
         let app = Self {
             services,
@@ -199,6 +215,7 @@ impl Application for AirDropdApp {
             show_link_dialog: false,
             link_url: String::new(),
             window_hidden: false,
+            tray_initialized: false,
             received_rx: Some(received_rx),
             splash_frames: assets::SplashFrames::new(),
             splash_tick: 0,
@@ -208,6 +225,12 @@ impl Application for AirDropdApp {
             dropped_files: Vec::new(),
             drop_generation: 0,
             pending_recipient_files: None,
+            web_drop_url: None,
+            web_drop_qr: None,
+            dj_qr: None,
+            dj_files_received: 0,
+            dj_last_file: None,
+            dj_saved_auto_accept: None,
         };
 
         (app, Command::none())
@@ -217,6 +240,8 @@ impl Application for AirDropdApp {
         match self.current_view {
             AppView::Main => "AirDropd".to_string(),
             AppView::Activity => "AirDropd — Live Activity".to_string(),
+            AppView::WebDrop => "AirDropd — Receive via QR".to_string(),
+            AppView::DjMode => "AirDropd — DJ Mode".to_string(),
             AppView::Settings => "AirDropd — Settings".to_string(),
             AppView::About => "AirDropd — About".to_string(),
             AppView::Loading | AppView::Splash => "AirDropd".to_string(),
@@ -240,6 +265,17 @@ impl Application for AirDropdApp {
                 self.current_view = AppView::Main;
                 self.is_loading = false;
                 self.status_message = "Ready".to_string();
+                if !self.tray_initialized {
+                    let name = self
+                        .services
+                        .config
+                        .read()
+                        .map(|c| c.broadcast_name.clone())
+                        .unwrap_or_else(|_| crate::config::default_broadcast_name());
+                    if tray::init_tray(&format!("AirDropd — {}", name)).is_ok() {
+                        self.tray_initialized = true;
+                    }
+                }
                 Command::perform(async {}, |_| Message::CheckFirewall)
             }
 
@@ -653,6 +689,53 @@ impl Application for AirDropdApp {
                 Command::none()
             }
 
+            Message::ShowWebDrop => {
+                self.refresh_web_drop(false);
+                self.current_view = AppView::WebDrop;
+                Command::none()
+            }
+
+            Message::ShowDjMode => {
+                let prev = self
+                    .services
+                    .config
+                    .read()
+                    .map(|c| c.auto_accept_incoming)
+                    .unwrap_or(false);
+                self.dj_saved_auto_accept = Some(prev);
+                self.services.incoming_transfer.set_auto_accept(true);
+                self.dj_files_received = 0;
+                self.dj_last_file = None;
+                self.refresh_web_drop(true);
+                self.current_view = AppView::DjMode;
+                crate::activity::log(
+                    crate::activity::Category::Transfer,
+                    "DJ Mode started — QR full-screen, auto-save enabled",
+                );
+                Command::batch([
+                    window::maximize(window::Id::MAIN, true),
+                    window::gain_focus(window::Id::MAIN),
+                ])
+            }
+
+            Message::ExitDjMode => {
+                if let Some(prev) = self.dj_saved_auto_accept.take() {
+                    self.services.incoming_transfer.set_auto_accept(prev);
+                }
+                self.current_view = AppView::Main;
+                crate::activity::log(
+                    crate::activity::Category::Transfer,
+                    format!(
+                        "DJ Mode ended — {} file(s) received this session",
+                        self.dj_files_received
+                    ),
+                );
+                Command::batch([
+                    window::maximize(window::Id::MAIN, false),
+                    window::gain_focus(window::Id::MAIN),
+                ])
+            }
+
             Message::ClearActivityLog => {
                 crate::activity::clear();
                 Command::none()
@@ -901,17 +984,32 @@ impl Application for AirDropdApp {
                 } else {
                     Vec::new()
                 };
+                let in_dj = self.current_view == AppView::DjMode;
                 for path in paths {
-                    self.add_notification(
-                        "File received".to_string(),
-                        format!(
-                            "Saved: {}",
-                            path.file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_else(|| path.display().to_string())
-                        ),
-                        messages::NotificationType::Success,
-                    );
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.display().to_string());
+                    if in_dj {
+                        self.dj_files_received = self.dj_files_received.saturating_add(1);
+                        let folder = path
+                            .parent()
+                            .and_then(|p| p.file_name())
+                            .map(|p| p.to_string_lossy().to_string());
+                        let display = match folder.as_deref() {
+                            Some(f) if f != "AirDropd" && f != "WebDrop" => {
+                                format!("{}/{}", f, name)
+                            }
+                            _ => name.clone(),
+                        };
+                        self.dj_last_file = Some(display);
+                    } else {
+                        self.add_notification(
+                            "File received".to_string(),
+                            format!("Saved: {}", name),
+                            messages::NotificationType::Success,
+                        );
+                    }
                 }
                 Command::none()
             }
@@ -1045,6 +1143,8 @@ impl Application for AirDropdApp {
             AppView::Loading => self.loading_view(),
             AppView::Main => self.main_view(),
             AppView::Activity => self.activity_view(),
+            AppView::WebDrop => self.web_drop_view(),
+            AppView::DjMode => self.dj_mode_view(),
             AppView::Settings => self.settings_view(),
             AppView::About => self.about_view(),
         }
@@ -1152,6 +1252,55 @@ impl AirDropdApp {
     /// About view.
     fn about_view(&self) -> Element<Message> {
         self.about_view.view(&self.theme)
+    }
+
+    /// Recompute the Web Drop URL + QR for the current network address.
+    fn refresh_web_drop(&mut self, large: bool) {
+        match crate::network::util::primary_ipv4() {
+            Ok(ip) => {
+                let url = format!("http://{}:{}/", ip, crate::protocols::webdrop::WEB_DROP_PORT);
+                let (module_px, quiet) = if large { (14, 4) } else { (8, 4) };
+                let png = qr::png_bytes(&url, module_px, quiet).ok();
+                if large {
+                    self.dj_qr = png.map(iced::widget::image::Handle::from_memory);
+                } else {
+                    self.web_drop_qr = png.map(iced::widget::image::Handle::from_memory);
+                }
+                self.web_drop_url = Some(url);
+            }
+            Err(_) => {
+                self.web_drop_url = None;
+                self.web_drop_qr = None;
+                self.dj_qr = None;
+            }
+        }
+    }
+
+    /// QR-based Web Drop receive screen.
+    fn web_drop_view(&self) -> Element<Message> {
+        let status = views::webdrop_view::WebDropStatus {
+            url: self.web_drop_url.clone(),
+            qr: self.web_drop_qr.clone(),
+        };
+        views::webdrop_view::render(&status, &self.theme)
+    }
+
+    /// Full-screen DJ receive mode.
+    fn dj_mode_view(&self) -> Element<Message> {
+        let device_name = self
+            .services
+            .config
+            .read()
+            .map(|c| c.broadcast_name.clone())
+            .unwrap_or_else(|_| "this PC".to_string());
+        let status = views::dj_mode_view::DjModeStatus {
+            device_name,
+            url: self.web_drop_url.clone(),
+            qr: self.dj_qr.clone(),
+            files_received: self.dj_files_received,
+            last_file: self.dj_last_file.clone(),
+        };
+        views::dj_mode_view::render(&status, &self.theme)
     }
 
     /// Live Activity protocol-event feed.
@@ -1489,8 +1638,11 @@ fn open_folder(path: &std::path::Path) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        let _ = path;
-        Err("Open folder is only supported on Windows".into())
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 
@@ -1513,13 +1665,31 @@ fn open_url(url: &str) -> Result<(), String> {
     }
 }
 
+/// Match the Windows renderer on each platform (DX12 on Windows, Metal on macOS).
+fn configure_render_backend() {
+    std::env::set_var("WGPU_VALIDATION", "0");
+    #[cfg(windows)]
+    std::env::set_var("WGPU_BACKEND", "dx12");
+    #[cfg(target_os = "macos")]
+    std::env::set_var("WGPU_BACKEND", "metal");
+}
+
+fn app_window_settings(icon: Option<iced::window::Icon>) -> iced::window::Settings {
+    iced::window::Settings {
+        size: iced::Size::new(680.0, 560.0),
+        min_size: Some(iced::Size::new(560.0, 480.0)),
+        position: iced::window::Position::Centered,
+        resizable: true,
+        decorations: true,
+        transparent: false,
+        icon,
+        ..Default::default()
+    }
+}
+
 /// Main function for starting the application.
 pub fn run(services: Arc<crate::AirDropdServices>) -> iced::Result {
-    // Prefer DirectX 12 backend on Windows to avoid Vulkan validation spam
-    // and disable extra WGPU validation layers in release usage.
-    // These can be overridden by user environment variables if needed.
-    std::env::set_var("WGPU_BACKEND", "dx12");
-    std::env::set_var("WGPU_VALIDATION", "0");
+    configure_render_backend();
 
     let window_icon = assets::load_window_icon();
 
@@ -1527,16 +1697,7 @@ pub fn run(services: Arc<crate::AirDropdServices>) -> iced::Result {
         flags: services,
         id: None,
         fonts: Vec::new(),
-        window: iced::window::Settings {
-            size: iced::Size::new(680.0, 560.0),
-            min_size: Some(iced::Size::new(560.0, 480.0)),
-            position: iced::window::Position::Centered,
-            resizable: true,
-            decorations: true,
-            transparent: false,
-            icon: window_icon,
-            ..Default::default()
-        },
+        window: app_window_settings(window_icon),
         default_font: iced::Font::DEFAULT,
         default_text_size: iced::Pixels(13.0),
         antialiasing: true,
@@ -1547,9 +1708,7 @@ pub fn run(services: Arc<crate::AirDropdServices>) -> iced::Result {
 pub async fn run_app(
     _services: std::sync::Arc<crate::AirDropdServices>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Prefer DX12 and disable WGPU validation in async run path as well
-    std::env::set_var("WGPU_BACKEND", "dx12");
-    std::env::set_var("WGPU_VALIDATION", "0");
+    configure_render_backend();
 
     let window_icon = assets::load_window_icon();
 
@@ -1557,19 +1716,10 @@ pub async fn run_app(
         flags: _services,
         id: None,
         fonts: Vec::new(),
-        window: iced::window::Settings {
-            size: iced::Size::new(680.0, 560.0),
-            min_size: Some(iced::Size::new(560.0, 480.0)),
-            position: iced::window::Position::Centered,
-            resizable: true,
-            decorations: true,
-            transparent: false,
-            icon: window_icon,
-            ..Default::default()
-        },
-        antialiasing: true,
+        window: app_window_settings(window_icon),
         default_font: iced::Font::DEFAULT,
-        default_text_size: iced::Pixels(14.0),
+        default_text_size: iced::Pixels(13.0),
+        antialiasing: true,
     })?;
     Ok(())
 }

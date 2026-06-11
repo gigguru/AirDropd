@@ -7,4 +7,6 @@ pub mod main_view;
 pub mod settings_view;
 pub mod about_view;
 pub mod activity_view;
+pub mod webdrop_view;
+pub mod dj_mode_view;
 pub mod splash_view;

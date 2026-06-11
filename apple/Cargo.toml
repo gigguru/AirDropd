@@ -1,0 +1,15 @@
+[package]
+name = "airdropd-apple"
+version = "0.1.0"
+edition = "2021"
+description = "AirDropd for macOS — QR Web Drop and DJ Mode"
+authors = ["Rhythmic Records"]
+license = "Proprietary"
+autobins = false
+
+[[bin]]
+name = "AirDropd"
+path = "src/main.rs"
+
+[dependencies]
+airdropd-core = { path = "../core" }

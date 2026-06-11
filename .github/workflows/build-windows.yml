@@ -30,7 +30,7 @@ jobs:
           workspaces: ". -> target"
 
       - name: Build release
-        run: cargo build --release --bin AirDropd
+        run: cargo build --release --manifest-path windows/Cargo.toml
 
       - name: Verify single portable executable
         shell: pwsh
@@ -54,12 +54,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\AirDropd.iss"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "windows\installer\AirDropd.iss"
           if (-not (Test-Path "dist\AirDropd Setup.exe")) {
             Write-Error "AirDropd Setup.exe was not produced"
           }
-          $setupMb = [math]::Round((Get-Item "dist\AirDropd Setup.exe").Length / 1MB, 2)
-          Write-Host "Built AirDropd Setup.exe ($setupMb MB)"
 
       - name: Upload portable executable
         uses: actions/upload-artifact@v7

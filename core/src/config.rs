@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -44,6 +45,10 @@ pub struct AppConfig {
     /// (AirPods, AirTags, Apple Watch) — useful for locating a lost device.
     #[serde(default)]
     pub show_all_devices: bool,
+    /// Web Drop guest device id → folder name (same phone always lands in the
+    /// same subfolder under `WebDrop/`).
+    #[serde(default)]
+    pub webdrop_devices: HashMap<String, String>,
 }
 
 fn default_discoverable() -> bool {
@@ -65,6 +70,7 @@ impl Default for AppConfig {
             firewall_prompt_dismissed: false,
             auto_accept_incoming: false,
             show_all_devices: false,
+            webdrop_devices: HashMap::new(),
         }
     }
 }
@@ -160,6 +166,47 @@ impl AppConfig {
         std::fs::create_dir_all(&dir)?;
         Ok(dir)
     }
+
+    /// Folder for a Web Drop guest device. The same `guest_id` (stored in the
+    /// phone browser) always maps to the same folder, so repeat uploads before
+    /// a show accumulate in one place instead of scattering.
+    pub fn resolve_webdrop_folder(
+        &mut self,
+        guest_id: &str,
+        guest_label: &str,
+        client_ip: &str,
+    ) -> Result<PathBuf> {
+        let webdrop_root = self.ensure_receive_dir()?.join("WebDrop");
+        std::fs::create_dir_all(&webdrop_root)?;
+
+        let key = if guest_id.trim().is_empty() {
+            format!("ip:{}", client_ip)
+        } else {
+            guest_id.trim().to_string()
+        };
+
+        if !self.webdrop_devices.contains_key(&key) {
+            let folder = if !guest_label.trim().is_empty() {
+                sanitize_folder_name(guest_label.trim())
+            } else if !guest_id.trim().is_empty() {
+                let short: String = guest_id.chars().filter(|c| c.is_ascii_hexdigit()).take(8).collect();
+                format!("Guest-{}", if short.is_empty() { "device" } else { &short })
+            } else {
+                format!("Guest-{}", client_ip.replace([':', '.'], "-"))
+            };
+            self.webdrop_devices.insert(key.clone(), folder);
+            let _ = self.save();
+        }
+
+        let name = self
+            .webdrop_devices
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| "Guest".to_string());
+        let dir = webdrop_root.join(&name);
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
 }
 
 pub fn shared(config: AppConfig) -> SharedConfig {
@@ -171,6 +218,16 @@ pub fn config_path() -> PathBuf {
     {
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             return PathBuf::from(local).join("AirDropd").join("config.toml");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("AirDropd")
+                .join("config.toml");
         }
     }
     dirs_fallback_config()
@@ -190,7 +247,30 @@ pub fn default_download_dir() -> PathBuf {
             return PathBuf::from(profile).join("Downloads");
         }
     }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join("Downloads");
+        }
+    }
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Turn a guest-supplied label into a safe folder name.
+pub fn sanitize_folder_name(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| if r#"<>:"/\|?*"#.contains(c) { '_' } else { c })
+        .collect();
+    out = out.trim().trim_matches('.').to_string();
+    if out.is_empty() {
+        return "Guest".to_string();
+    }
+    if out.len() > 48 {
+        out.truncate(48);
+        out = out.trim_end().to_string();
+    }
+    out
 }
 
 pub fn default_broadcast_name() -> String {

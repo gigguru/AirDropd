@@ -20,9 +20,9 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 LicenseFile=license.txt
 InfoBeforeFile=intro.txt
-OutputDir=..\dist
+OutputDir=..\..\dist
 OutputBaseFilename=AirDropd Setup
-SetupIconFile=..\assets\airdropd.ico
+SetupIconFile=..\..\assets\airdropd.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -42,8 +42,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "startupicon"; Description: "Start AirDropd when Windows starts"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
-Source: "..\target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\assets\airdropd.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\assets\airdropd.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\airdropd.ico"

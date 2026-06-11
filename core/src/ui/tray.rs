@@ -202,15 +202,105 @@ mod imp {
 #[cfg(windows)]
 pub use imp::{init_tray, poll_tray_action, set_tooltip};
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod macos_imp {
+    use std::cell::RefCell;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+    use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
+
+    thread_local! {
+        static TRAY: RefCell<Option<TrayIcon>> = const { RefCell::new(None) };
+    }
+
+    static TRAY_READY: AtomicBool = AtomicBool::new(false);
+    static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+    static SHOW_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+    fn load_icon() -> anyhow::Result<Icon> {
+        let img = ::image::load_from_memory(super::super::assets::ICON_PNG)?;
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        Ok(Icon::from_rgba(rgba.into_raw(), width, height)?)
+    }
+
+    /// macOS requires the menu-bar icon on the main thread after the GUI loop
+    /// is running — call from `SplashComplete`, not app construction.
+    pub fn init_tray(tooltip: &str) -> anyhow::Result<()> {
+        if TRAY_READY.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        TrayIconEvent::set_event_handler(Some(|event| {
+            if let TrayIconEvent::Click {
+                button: tray_icon::MouseButton::Left,
+                ..
+            } = event
+            {
+                SHOW_REQUESTED.store(true, Ordering::SeqCst);
+            }
+        }));
+        MenuEvent::set_event_handler(Some(|event: MenuEvent| match event.id.0.as_str() {
+            "show" => SHOW_REQUESTED.store(true, Ordering::SeqCst),
+            "quit" => QUIT_REQUESTED.store(true, Ordering::SeqCst),
+            _ => {}
+        }));
+
+        let show = MenuItem::with_id("show", "Show AirDropd", true, None);
+        let quit = MenuItem::with_id("quit", "Quit", true, None);
+        let menu = Menu::with_items(&[
+            &show,
+            &PredefinedMenuItem::separator(),
+            &quit,
+        ])?;
+
+        let icon = load_icon()?;
+        let tray = TrayIconBuilder::new()
+            .with_tooltip(tooltip)
+            .with_icon(icon)
+            .with_menu(Box::new(menu))
+            .with_menu_on_left_click(false)
+            .build()?;
+
+        TRAY.with(|slot| {
+            *slot.borrow_mut() = Some(tray);
+        });
+        TRAY_READY.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    pub fn poll_tray_action() -> Option<&'static str> {
+        if QUIT_REQUESTED.swap(false, Ordering::SeqCst) {
+            return Some("quit");
+        }
+        if SHOW_REQUESTED.swap(false, Ordering::SeqCst) {
+            return Some("show");
+        }
+        None
+    }
+
+    pub fn set_tooltip(tooltip: &str) {
+        TRAY.with(|slot| {
+            if let Some(tray) = slot.borrow_mut().as_mut() {
+                let _ = tray.set_tooltip(Some(tooltip.to_string()));
+            }
+        });
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub use macos_imp::{init_tray, poll_tray_action, set_tooltip};
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
 pub fn init_tray(_tooltip: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 pub fn poll_tray_action() -> Option<&'static str> {
     None
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 pub fn set_tooltip(_tooltip: &str) {}

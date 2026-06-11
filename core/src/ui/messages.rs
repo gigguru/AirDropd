@@ -83,6 +83,11 @@ pub enum Message {
     ShowActivity,
     ClearActivityLog,
 
+    // Web Drop (QR upload) screen
+    ShowWebDrop,
+    ShowDjMode,
+    ExitDjMode,
+
     // System tray / window
     TrayAction(String),
     WindowCloseRequested,

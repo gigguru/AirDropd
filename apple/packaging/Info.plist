@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>AirDropd</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.rhythmicrecords.airdropd</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>AirDropd</string>
+    <key>CFBundleDisplayName</key>
+    <string>AirDropd</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSUIElement</key>
+    <false/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>AirDropd uses Bluetooth to discover nearby iPhones, iPads, and other Apple devices and estimate their distance on the radar.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>AirDropd uses Bluetooth to discover nearby iPhones, iPads, and other Apple devices and estimate their distance on the radar.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>AirDropd uses your local network to discover nearby devices, receive AirDrop transfers, and serve the QR Web Drop upload page to guest phones.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_airdrop._tcp</string>
+        <string>_airdrop._udp</string>
+        <string>_companion-link._tcp</string>
+        <string>_airplay._tcp</string>
+        <string>_raop._tcp</string>
+        <string>_device-info._tcp</string>
+        <string>_apple-mobdev2._tcp</string>
+        <string>_rdlink._tcp</string>
+    </array>
+</dict>
+</plist>

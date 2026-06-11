@@ -7,3 +7,4 @@ pub mod http_server;
 pub mod tls_store;
 pub mod incoming_transfer;
 pub mod awdl;
+pub mod webdrop;

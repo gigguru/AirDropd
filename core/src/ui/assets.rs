@@ -3,7 +3,7 @@
 use iced::widget::image::Handle;
 use iced::window;
 
-pub const ICON_PNG: &[u8] = include_bytes!("../../assets/airdropd-icon.png");
+pub const ICON_PNG: &[u8] = include_bytes!("../../../assets/airdropd-icon.png");
 
 const SPLASH_STEPS: usize = 35;
 

@@ -30,6 +30,7 @@ All operations work **locally** over your network, without cloud or third-party 
 - 🏷️ **Device-type icons**: iPhone, iPad, MacBook, Mac, Watch, Apple TV identified from their mDNS hardware records  
 - 📱 **iPhone detection**: Apple Continuity BLE beacons reveal nearby iPhones/iPads (they never advertise AirDrop on regular Wi-Fi — AWDL only), including "AirDrop open" status when their share sheet is up  
 - 🧭 **Lost-device finder**: enable *Show all nearby devices* to also see AirPods, AirTags, and Find My beacons with live dBm signal readout — walk around and watch the signal rise  
+- 📲 **QR Web Drop + DJ Mode**: guests scan a QR code (iPhone Camera or Android) and send files in the browser — no app, no internet. **DJ Mode** shows a full-screen QR and auto-saves every upload. Each phone gets its own folder under `Downloads/AirDropd/WebDrop/` so repeat sends before a show stay organized  
 - 🖱️ **Drag & drop**: Drop files on the window — they go to the selected device  
 - 🔍 **Device Discovery**: Automatic discovery via **mDNS** + **Bluetooth LE**  
 - 📊 **Live progress**: Real streamed uploads with progress reporting  
@@ -40,9 +41,26 @@ All operations work **locally** over your network, without cloud or third-party 
 
 ## 💻 System Requirements
 
-- 🧩 Windows 10 or later  
-- 🌐 Network adapter with **multicast** support  
-- 🔐 Run as administrator (required for mDNS service)
+- 🧩 **Windows 10+** or **macOS 12+** (Apple Silicon or Intel)  
+- 🌐 Network adapter on the same Wi-Fi as guest phones  
+- 🔐 Windows: run as administrator for full mDNS (optional for QR Web Drop only)
+
+---
+
+## 🧱 Project layout
+
+AirDropd is split into platform-specific app folders plus shared core code:
+
+```
+AirDropd/
+├── core/          # Shared Rust library (UI, protocols, Web Drop, services)
+├── apple/         # macOS app → builds AirDropd.app
+├── windows/       # Windows app → builds AirDropd.exe + installer
+├── assets/        # Icons shared by both platforms
+└── OWDL/          # AWDL protocol library
+```
+
+Platform-specific code (system tray, firewall, BLE advertising) lives in `core/` behind `#[cfg(...)]` gates, while each platform folder owns its own binary entry point and packaging.
 
 ---
 
@@ -50,27 +68,51 @@ All operations work **locally** over your network, without cloud or third-party 
 
 ### Download (recommended)
 
-Pre-built portable **`AirDropd.exe`** is produced by GitHub Actions on every push to `main`:
+Pre-built binaries are produced by GitHub Actions on every push to `main`:
 
-1. Open [Actions → Build Windows](https://github.com/gigguru/AirDropd/actions/workflows/build-windows.yml)
-2. Download the **AirDropd-windows-x86_64** artifact — it contains a single `AirDropd.exe` with no extra DLLs to ship.
+| Platform | Workflow | Artifact |
+|---|---|---|
+| Windows | [Build Windows](https://github.com/gigguru/AirDropd/actions/workflows/build-windows.yml) | `AirDropd.exe` + installer |
+| macOS | [Build macOS](https://github.com/gigguru/AirDropd/actions/workflows/build-macos.yml) | `AirDropd.app` (`.app` bundle) |
 
-Tag a release (`v0.1.0`, etc.) to attach the exe to a GitHub Release automatically.
+### Build from source (macOS)
+
+```bash
+chmod +x apple/build-macos.sh
+./apple/build-macos.sh
+# → apple/dist/AirDropd.app
+open apple/dist/AirDropd.app
+```
+
+To install: drag `AirDropd.app` to **Applications**, or run:
+
+```bash
+cp -R apple/dist/AirDropd.app /Applications/
+```
+
+On first launch, macOS may ask you to allow incoming network connections (for the local Web Drop server on port 8771).
 
 ### Build from source (Windows)
 
 ```bat
-build.bat
+cargo build --release --manifest-path windows\Cargo.toml
 ```
 
 Output: `target\release\AirDropd.exe` (portable, statically linked MSVC runtime).
+
+For the installer, run Inno Setup on `windows\installer\AirDropd.iss`.
 
 ### Build from source (Rust)
 
 ```bash
 git clone https://github.com/gigguru/AirDropd.git
 cd AirDropd
-cargo build --release --bin AirDropd
+
+# macOS
+cargo build --release --manifest-path apple/Cargo.toml
+
+# Windows
+cargo build --release --manifest-path windows/Cargo.toml
 ```
 
 ---
@@ -81,7 +123,7 @@ cargo build --release --bin AirDropd
 2. AirDropd automatically discovers nearby Apple devices and shows them in the radar  
 3. **Send**: click a device, then *Send Files*, *Send Folder*, or *Send Link* — or just drag files onto the window  
 4. **Receive**: have the iPhone/Mac set AirDrop visibility to *Everyone*, send to your PC, and accept the prompt (files land in `Downloads\AirDropd`)  
-5. **DJ mode**: enable *Automatically accept incoming transfers* in Settings so guests' tracks save without interaction
+5. **DJ mode**: tap **DJ Mode** for a full-screen QR — guests scan and send; each phone's files land in `Downloads/AirDropd/WebDrop/<their name>/`. Enable *Automatically accept incoming transfers* in Settings for legacy AirDrop receives too
 
 ---
 
