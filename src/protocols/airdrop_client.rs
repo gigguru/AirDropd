@@ -102,15 +102,24 @@ impl AirDropClient {
             "SenderComputerName".to_string(),
             Value::String(hostname.clone()),
         );
+        use crate::activity::{log as alog, Category as Cat};
+
+        alog(
+            Cat::Transfer,
+            format!("Sending {} file(s) to {} …", entries.len(), target.ip()),
+        );
         post_discover_with_retry(target, &encode_plist(&discover)?)
             .await
+            .inspect_err(|e| alog(Cat::Error, format!("/Discover failed: {}", e)))
             .context("receiver did not answer /Discover")?;
 
         // 2. /Ask — request consent, listing every file.
         let ask = build_ask_plist(&hostname, sender_id, &entries, None)?;
         post_on_new_connection(target, "/Ask", &ask, "application/octet-stream")
             .await
+            .inspect_err(|_| alog(Cat::Transfer, "Receiver declined the transfer".to_string()))
             .context("receiver declined the transfer")?;
+        alog(Cat::Transfer, "Receiver accepted — uploading".to_string());
 
         // 3. Build the gzip cpio archive on disk (no large memory spikes).
         let archive_path = std::env::temp_dir().join(format!(
@@ -131,8 +140,10 @@ impl AirDropClient {
         // 4. /Upload — stream the archive with chunked transfer encoding.
         let upload_result = post_upload_streamed(target, &archive_path, progress).await;
         let _ = tokio::fs::remove_file(&archive_path).await;
-        upload_result?;
+        upload_result
+            .inspect_err(|e| alog(Cat::Error, format!("Upload failed: {}", e)))?;
 
+        alog(Cat::Transfer, "Upload completed".to_string());
         set_progress(progress, 100.0);
         Ok(())
     }

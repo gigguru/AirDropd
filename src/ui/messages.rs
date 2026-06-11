@@ -79,6 +79,10 @@ pub enum Message {
     SaveSettings,
     ResetSettings,
 
+    // Live Activity panel
+    ShowActivity,
+    ClearActivityLog,
+
     // System tray / window
     TrayAction(String),
     WindowCloseRequested,

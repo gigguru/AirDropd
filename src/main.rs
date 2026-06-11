@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+mod activity;
 mod config;
 mod network;
 mod protocols;

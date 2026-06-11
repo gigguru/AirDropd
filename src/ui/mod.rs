@@ -141,6 +141,8 @@ pub struct AirDropdApp {
 pub enum AppView {
     /// Main view with nearby devices and action panel
     Main,
+    /// Live Activity protocol-event feed
+    Activity,
     /// Settings view
     Settings,
     /// About view
@@ -214,6 +216,7 @@ impl Application for AirDropdApp {
     fn title(&self) -> String {
         match self.current_view {
             AppView::Main => "AirDropd".to_string(),
+            AppView::Activity => "AirDropd — Live Activity".to_string(),
             AppView::Settings => "AirDropd — Settings".to_string(),
             AppView::About => "AirDropd — About".to_string(),
             AppView::Loading | AppView::Splash => "AirDropd".to_string(),
@@ -645,6 +648,16 @@ impl Application for AirDropdApp {
                 Command::none()
             }
 
+            Message::ShowActivity => {
+                self.current_view = AppView::Activity;
+                Command::none()
+            }
+
+            Message::ClearActivityLog => {
+                crate::activity::clear();
+                Command::none()
+            }
+
             Message::ShowMainView => {
                 self.current_view = AppView::Main;
                 Command::none()
@@ -1031,6 +1044,7 @@ impl Application for AirDropdApp {
             AppView::Splash => views::splash_view::render(&self.splash_frames, self.splash_tick),
             AppView::Loading => self.loading_view(),
             AppView::Main => self.main_view(),
+            AppView::Activity => self.activity_view(),
             AppView::Settings => self.settings_view(),
             AppView::About => self.about_view(),
         }
@@ -1138,6 +1152,24 @@ impl AirDropdApp {
     /// About view.
     fn about_view(&self) -> Element<Message> {
         self.about_view.view(&self.theme)
+    }
+
+    /// Live Activity protocol-event feed.
+    fn activity_view(&self) -> Element<Message> {
+        let (broadcast_name, discoverable) = self
+            .services
+            .config
+            .read()
+            .map(|c| (c.broadcast_name.clone(), c.discoverable))
+            .unwrap_or_else(|_| ("AirDropd".to_string(), true));
+        let status = views::activity_view::ReceiverStatus {
+            broadcast_name,
+            address: crate::network::util::primary_ipv4()
+                .ok()
+                .map(|ip| ip.to_string()),
+            discoverable,
+        };
+        views::activity_view::render(status, &self.theme)
     }
   
     /// Fetch discovered Apple devices from mDNS and BLE.

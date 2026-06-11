@@ -215,6 +215,17 @@ impl BleManager {
                             let mut devices_lock = devices.lock().await;
                             match devices_lock.get_mut(&device_id) {
                                 Some(existing) => {
+                                    // A device just opened its share sheet —
+                                    // someone is about to AirDrop something.
+                                    if device.airdrop_active && !existing.airdrop_active {
+                                        crate::activity::log(
+                                            crate::activity::Category::Bluetooth,
+                                            format!(
+                                                "Nearby Apple device opened AirDrop ({} dBm)",
+                                                device.rssi
+                                            ),
+                                        );
+                                    }
                                     let changed = existing.rssi != device.rssi
                                         || existing.manufacturer_data
                                             != device.manufacturer_data
@@ -281,12 +292,20 @@ impl BleManager {
         match crate::network::ble_advertise::start(device_name) {
             Ok(()) => {
                 *self.is_advertising.lock().await = true;
+                crate::activity::log(
+                    crate::activity::Category::Bluetooth,
+                    "AirDrop BLE beacon broadcasting (wakes nearby Apple receivers)",
+                );
                 Ok(())
             }
             Err(e) => {
                 warn!(
                     "BLE advertising failed: {} — iPhones may not discover this PC via AirDrop",
                     e
+                );
+                crate::activity::log(
+                    crate::activity::Category::Error,
+                    format!("BLE advertising failed: {}", e),
                 );
                 Err(e)
             }

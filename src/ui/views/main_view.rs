@@ -287,6 +287,14 @@ impl<'a> MainView<'a> {
                 .style(styles::text_color_secondary(*theme)),
             Space::with_width(Length::Fill),
             button(
+                text("Activity")
+                    .size(12)
+                    .style(styles::text_color_secondary(*theme))
+            )
+            .on_press(Message::ShowActivity)
+            .style(iced::theme::Button::Text)
+            .padding([4, 8]),
+            button(
                 text("⚙")
                     .size(16)
                     .style(styles::text_color_secondary(*theme))

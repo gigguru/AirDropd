@@ -106,6 +106,10 @@ impl AirDropHttpServer {
 
         let listener = bind_dual_stack(self.port).await?;
         info!("AirDrop HTTPS server listening on port {}", self.port);
+        crate::activity::log(
+            crate::activity::Category::Server,
+            format!("AirDrop receiver listening on port {}", self.port),
+        );
 
         *self.running.lock().await = true;
         let running = self.running.clone();
@@ -156,8 +160,19 @@ impl AirDropHttpServer {
         received_tx: Option<tokio::sync::broadcast::Sender<PathBuf>>,
         incoming_transfer: Option<Arc<crate::protocols::incoming_transfer::IncomingTransferService>>,
     ) -> Result<()> {
+        use crate::activity::{log as alog, Category as Cat};
+
         debug!("Handling HTTPS connection from {}", addr);
-        let mut tls_stream = acceptor.accept(stream).await?;
+        let mut tls_stream = match acceptor.accept(stream).await {
+            Ok(s) => s,
+            Err(e) => {
+                alog(
+                    Cat::Error,
+                    format!("TLS handshake from {} failed: {}", addr.ip(), e),
+                );
+                return Err(e.into());
+            }
+        };
 
         loop {
             let request = match read_http_request(&mut tls_stream).await {
@@ -169,6 +184,10 @@ impl AirDropHttpServer {
             };
 
             debug!("HTTP {} {}", request.method, request.path);
+            alog(
+                Cat::Server,
+                format!("{} {} from {}", request.method, request.path, addr.ip()),
+            );
 
             let close_connection = match (request.method.as_str(), request.path.as_str()) {
                 ("GET", "/") | ("HEAD", "/") => {
@@ -265,12 +284,35 @@ async fn handle_ask(
         details.sender_name,
         details.files.len()
     );
+    let sender_name = details.sender_name.clone();
+    let file_count = details.files.len();
+    crate::activity::log(
+        crate::activity::Category::Transfer,
+        format!(
+            "\"{}\" wants to send {} — awaiting decision",
+            sender_name,
+            if details.link.is_some() {
+                "a link".to_string()
+            } else {
+                format!("{} file(s)", file_count)
+            }
+        ),
+    );
 
     let accepted = if let Some(gate) = incoming_transfer {
         gate.wait_for_decision(details).await
     } else {
         true
     };
+
+    crate::activity::log(
+        crate::activity::Category::Transfer,
+        format!(
+            "Transfer from \"{}\" {}",
+            sender_name,
+            if accepted { "accepted" } else { "declined" }
+        ),
+    );
 
     if !accepted {
         write_response(stream, 503, &[], true).await?;
@@ -354,7 +396,22 @@ async fn handle_upload(
         request.body.clone()
     };
 
-    let saved = cpio_extract::extract_gzip_cpio(std::io::Cursor::new(payload), &receive_dir)?;
+    let saved = match cpio_extract::extract_gzip_cpio(std::io::Cursor::new(payload), &receive_dir)
+    {
+        Ok(saved) => saved,
+        Err(e) => {
+            crate::activity::log(
+                crate::activity::Category::Error,
+                format!("Failed to unpack received archive: {}", e),
+            );
+            return Err(e);
+        }
+    };
+
+    crate::activity::log(
+        crate::activity::Category::Transfer,
+        format!("Received {} file(s) into the download folder", saved.len()),
+    );
 
     for path in &saved {
         info!("Saved received file to {:?}", path);

@@ -185,6 +185,13 @@ impl AirDrop {
             "Registered _airdrop._tcp as \"{}\" ({}) on {}:8770",
             broadcast_name, host_fqdn, ip
         );
+        crate::activity::log(
+            crate::activity::Category::Mdns,
+            format!(
+                "Advertising as \"{}\" on {}:8770 (visible to Macs on this network)",
+                broadcast_name, ip
+            ),
+        );
         Ok(())
     }
 
