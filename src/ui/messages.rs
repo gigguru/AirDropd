@@ -75,6 +75,7 @@ pub enum Message {
     DownloadDirSelected(Option<PathBuf>),
     MinimizeToTrayChanged(bool),
     AutoAcceptIncomingChanged(bool),
+    ShowAllDevicesChanged(bool),
     SaveSettings,
     ResetSettings,
 

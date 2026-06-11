@@ -40,6 +40,10 @@ pub struct AppConfig {
     /// Automatically accept incoming AirDrop transfers without prompting.
     #[serde(default)]
     pub auto_accept_incoming: bool,
+    /// Show every nearby Apple device on the radar, including accessories
+    /// (AirPods, AirTags, Apple Watch) — useful for locating a lost device.
+    #[serde(default)]
+    pub show_all_devices: bool,
 }
 
 fn default_discoverable() -> bool {
@@ -60,6 +64,7 @@ impl Default for AppConfig {
             firewall_exceptions_added: false,
             firewall_prompt_dismissed: false,
             auto_accept_incoming: false,
+            show_all_devices: false,
         }
     }
 }

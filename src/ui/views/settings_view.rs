@@ -37,6 +37,7 @@ pub struct SettingsView {
     download_dir_text: String,
     minimize_to_tray: bool,
     auto_accept_incoming: bool,
+    show_all_devices: bool,
 }
 
 impl SettingsView {
@@ -46,6 +47,7 @@ impl SettingsView {
             download_dir_text: cfg.download_dir.display().to_string(),
             minimize_to_tray: cfg.minimize_to_tray,
             auto_accept_incoming: cfg.auto_accept_incoming,
+            show_all_devices: cfg.show_all_devices,
         }
     }
 
@@ -60,6 +62,7 @@ impl SettingsView {
         }
         cfg.minimize_to_tray = self.minimize_to_tray;
         cfg.auto_accept_incoming = self.auto_accept_incoming;
+        cfg.show_all_devices = self.show_all_devices;
     }
 
     pub fn set_broadcast_name(&mut self, name: String) {
@@ -76,6 +79,10 @@ impl SettingsView {
 
     pub fn set_auto_accept_incoming(&mut self, value: bool) {
         self.auto_accept_incoming = value;
+    }
+
+    pub fn set_show_all_devices(&mut self, value: bool) {
+        self.show_all_devices = value;
     }
 
     pub fn view(&self, theme: &Theme) -> Element<Message> {
@@ -164,6 +171,14 @@ impl SettingsView {
             text(
                 "When enabled, files sent to this PC are saved without asking. \
                  Great for performances: guests' tracks land straight in your download folder.",
+            )
+            .size(12),
+            checkbox("Show all nearby devices", self.show_all_devices)
+                .on_toggle(Message::ShowAllDevicesChanged),
+            text(
+                "Also shows AirPods, AirTags, Apple Watch and Find My beacons on the \
+                 radar with live signal strength — walk around and watch the dBm rise \
+                 to locate a lost device after a show.",
             )
             .size(12),
         ]

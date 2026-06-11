@@ -28,6 +28,10 @@ pub struct BleDevice {
     /// Device is broadcasting an AirDrop beacon (type 0x05) right now —
     /// its owner has the share sheet / AirDrop browser open.
     pub airdrop_active: bool,
+    /// Accessory category ("AirPods", "Find My device", …) when the device
+    /// only emits accessory beacons. Shown when "Show all nearby devices"
+    /// is enabled — handy for locating a lost device by signal strength.
+    pub accessory_label: Option<&'static str>,
 }
 
 /// What an Apple Continuity advertisement tells us about a device.
@@ -39,9 +43,11 @@ struct AppleBeacon {
     /// Presence beacons emitted by iPhones/iPads/Macs while idle:
     /// 0x10 Nearby Info, 0x0C Handoff, 0x0F Nearby Action, 0x0E Tethering.
     presence: bool,
-    /// Accessory beacons we don't want on the radar:
+    /// Device only emits accessory beacons:
     /// 0x02 iBeacon, 0x07 Proximity Pairing (AirPods), 0x12 Find My (AirTag).
     accessory_only: bool,
+    /// Best label for an accessory-only device.
+    accessory_label: Option<&'static str>,
 }
 
 /// Parse the type-length-value stream inside Apple manufacturer data.
@@ -50,8 +56,8 @@ fn parse_apple_beacon(data: &[u8]) -> AppleBeacon {
         is_apple: true,
         ..Default::default()
     };
-    let mut seen_accessory = false;
     let mut seen_device = false;
+    let mut accessory: Option<&'static str> = None;
 
     let mut i = 0;
     while i + 1 < data.len() {
@@ -68,16 +74,21 @@ fn parse_apple_beacon(data: &[u8]) -> AppleBeacon {
                 beacon.presence = true;
                 seen_device = true;
             }
-            0x02 | 0x07 | 0x12 | 0x0A => {
-                // iBeacon / AirPods pairing / Find My / AirPlay target.
-                seen_accessory = true;
+            0x07 => accessory = Some(accessory.unwrap_or("AirPods")),
+            0x12 => {
+                // Find My network beacon: AirTags, and any lost/powered-off
+                // Apple device in Find My mode.
+                accessory = Some("Find My device");
             }
+            0x02 => accessory = Some(accessory.unwrap_or("Beacon")),
+            0x0A => accessory = Some(accessory.unwrap_or("AirPlay device")),
             _ => {}
         }
         i += 2 + len;
     }
 
-    beacon.accessory_only = seen_accessory && !seen_device;
+    beacon.accessory_only = accessory.is_some() && !seen_device;
+    beacon.accessory_label = if beacon.accessory_only { accessory } else { None };
     beacon
 }
 
@@ -172,13 +183,14 @@ impl BleManager {
 
                             let local_name = props.local_name.clone().unwrap_or_default();
 
-                            // Keep Apple devices only (phones, tablets, Macs);
-                            // drop accessories (AirPods, AirTags, iBeacons)
-                            // and non-Apple Bluetooth noise.
-                            let apple_device = beacon.is_apple && !beacon.accessory_only;
-                            let has_signal =
-                                beacon.airdrop || beacon.presence || !local_name.is_empty();
-                            if !apple_device || !has_signal {
+                            // Keep all Apple devices — phones/tablets/Macs and
+                            // accessories (the UI decides whether accessories
+                            // are shown). Drop non-Apple Bluetooth noise.
+                            let has_signal = beacon.airdrop
+                                || beacon.presence
+                                || beacon.accessory_only
+                                || !local_name.is_empty();
+                            if !beacon.is_apple || !has_signal {
                                 continue;
                             }
 
@@ -191,9 +203,34 @@ impl BleManager {
                                 last_seen: std::time::Instant::now(),
                                 apple: beacon.is_apple,
                                 airdrop_active: beacon.airdrop,
+                                accessory_label: beacon.accessory_label,
                             };
 
-                            devices.lock().await.insert(device_id, device);
+                            // btleplug keeps departed peripherals in its cache
+                            // with frozen properties. Only refresh last_seen
+                            // when the advertisement actually changed (RSSI
+                            // fluctuates on every real beacon), so devices
+                            // that left the area age out instead of haunting
+                            // the radar forever.
+                            let mut devices_lock = devices.lock().await;
+                            match devices_lock.get_mut(&device_id) {
+                                Some(existing) => {
+                                    let changed = existing.rssi != device.rssi
+                                        || existing.manufacturer_data
+                                            != device.manufacturer_data
+                                        || existing.name != device.name;
+                                    let last_seen = if changed {
+                                        device.last_seen
+                                    } else {
+                                        existing.last_seen
+                                    };
+                                    *existing = BleDevice { last_seen, ..device };
+                                }
+                                None => {
+                                    devices_lock.insert(device_id, device);
+                                }
+                            }
+                            drop(devices_lock);
                             debug!(
                                 "BLE device: {} apple={} airdrop_active={}",
                                 if local_name.is_empty() { "<anonymous>" } else { &local_name },
@@ -289,10 +326,11 @@ impl BleManager {
     pub async fn get_discovered_devices(&self) -> Vec<BleDevice> {
         let devices = self.discovered_devices.lock().await;
         let now = std::time::Instant::now();
-        
-        // Filter out devices not seen in the last 30 seconds
+
+        // Drop devices whose advertisements went quiet (left the area).
+        // 45s tolerates slow advertising intervals without ghosting.
         devices.values()
-            .filter(|device| now.duration_since(device.last_seen).as_secs() < 30)
+            .filter(|device| now.duration_since(device.last_seen).as_secs() < 45)
             .cloned()
             .collect()
     }
@@ -364,13 +402,23 @@ mod tests {
         assert!(!beacon.accessory_only);
     }
 
-    /// AirPods (proximity pairing 0x07) must not appear on the radar.
+    /// AirPods (proximity pairing 0x07) classify as accessories with a label.
     #[test]
     fn airpods_beacon_is_accessory_only() {
         let data = [0x07, 0x19, 0x01, 0x0E, 0x20, 0x00, 0x00];
         let beacon = parse_apple_beacon(&data);
         assert!(beacon.accessory_only);
         assert!(!beacon.presence);
+        assert_eq!(beacon.accessory_label, Some("AirPods"));
+    }
+
+    /// Find My beacons (0x12) — AirTags or lost devices — get the right label.
+    #[test]
+    fn find_my_beacon_is_labeled_tracker() {
+        let data = [0x12, 0x19, 0x10, 0x00, 0x00];
+        let beacon = parse_apple_beacon(&data);
+        assert!(beacon.accessory_only);
+        assert_eq!(beacon.accessory_label, Some("Find My device"));
     }
 
     /// A device emitting both Handoff and an accessory TLV is still a device.

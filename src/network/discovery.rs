@@ -35,6 +35,9 @@ pub enum DeviceKind {
 	MacDesktop,
 	AppleWatch,
 	AppleTv,
+	AirPods,
+	/// Find My network beacon: AirTag or a lost device in Find My mode.
+	Tracker,
 	WindowsPc,
 	Unknown,
 }
@@ -50,6 +53,8 @@ impl DeviceKind {
 			DeviceKind::MacDesktop => "Mac",
 			DeviceKind::AppleWatch => "Apple Watch",
 			DeviceKind::AppleTv => "Apple TV",
+			DeviceKind::AirPods => "AirPods",
+			DeviceKind::Tracker => "Find My device",
 			DeviceKind::WindowsPc => "Windows PC",
 			DeviceKind::Unknown => "Apple device",
 		}
@@ -65,6 +70,8 @@ impl DeviceKind {
 			DeviceKind::MacDesktop => "🖥",
 			DeviceKind::AppleWatch => "⌚",
 			DeviceKind::AppleTv => "📺",
+			DeviceKind::AirPods => "🎧",
+			DeviceKind::Tracker => "📍",
 			DeviceKind::WindowsPc => "🪟",
 			DeviceKind::Unknown => "📡",
 		}
@@ -147,6 +154,10 @@ impl DiscoveredDevice {
 			DeviceKind::AppleWatch
 		} else if name.contains("apple tv") {
 			DeviceKind::AppleTv
+		} else if name.contains("airpods") {
+			DeviceKind::AirPods
+		} else if name.contains("find my") || name.contains("airtag") {
+			DeviceKind::Tracker
 		} else if name.contains("pc") || name.contains("windows") || name.contains("desktop") {
 			DeviceKind::WindowsPc
 		} else {
@@ -295,15 +306,11 @@ impl DeviceDiscovery {
 										}
 									}
 									ServiceEvent::ServiceRemoved(_, fullname) => {
+										// Keys are "fullname:addr:port", so a
+										// prefix match removes exactly the
+										// entries of the departed service.
 										let mut map = devices.lock().await;
-										map.retain(|_, d| {
-											!fullname.contains(&d.name)
-												&& !d
-													.txt_records
-													.get("name")
-													.map(|n| fullname.contains(n))
-													.unwrap_or(false)
-										});
+										map.retain(|key, _| !key.starts_with(&fullname));
 									}
 									_ => {}
 								},

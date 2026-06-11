@@ -311,12 +311,18 @@ impl<'a> Program<Message> for Radar<'a> {
                 vertical_alignment: alignment::Vertical::Top,
                 ..Default::default()
             });
-            // Device-type line, e.g. "iPhone" or "MacBook · Bluetooth".
+            // Device-type line, e.g. "iPhone" or "MacBook · -58 dBm".
+            // For Bluetooth-only devices show live signal strength: walking
+            // toward the device makes the number rise — a lost-device finder.
             let airdrop_active = device.txt_records.contains_key("airdrop_active");
+            let signal = device
+                .rssi
+                .map(|r| format!(" · {} dBm", r))
+                .unwrap_or_else(|| " · Bluetooth".to_string());
             let kind_line = if airdrop_active {
-                "AirDrop open · Bluetooth".to_string()
+                format!("AirDrop open{}", signal)
             } else if ble_only {
-                format!("{} · Bluetooth", device.kind().label())
+                format!("{}{}", device.kind().label(), signal)
             } else {
                 device.kind().label().to_string()
             };

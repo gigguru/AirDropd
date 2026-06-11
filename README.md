@@ -27,9 +27,13 @@ All operations work **locally** over your network, without cloud or third-party 
 - 🔁 **AirDrop**: Send and receive files between Windows PCs and Apple devices  
 - 📂 **Folder transfers**: Whole folders preserved with their structure  
 - 📡 **Distance radar**: Devices placed by Bluetooth signal strength, closest in the middle  
+- 🏷️ **Device-type icons**: iPhone, iPad, MacBook, Mac, Watch, Apple TV identified from their mDNS hardware records  
+- 📱 **iPhone detection**: Apple Continuity BLE beacons reveal nearby iPhones/iPads (they never advertise AirDrop on regular Wi-Fi — AWDL only), including "AirDrop open" status when their share sheet is up  
+- 🧭 **Lost-device finder**: enable *Show all nearby devices* to also see AirPods, AirTags, and Find My beacons with live dBm signal readout — walk around and watch the signal rise  
 - 🖱️ **Drag & drop**: Drop files on the window — they go to the selected device  
 - 🔍 **Device Discovery**: Automatic discovery via **mDNS** + **Bluetooth LE**  
 - 📊 **Live progress**: Real streamed uploads with progress reporting  
+- 🗜️ **Wire-format compatible**: gzip cpio archives in both **odc** (what Apple's sharingd/libarchive produces) and **newc** formats  
 - 🎨 **Modern Interface**: Clean, responsive macOS-style UI
 
 ---

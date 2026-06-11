@@ -689,6 +689,11 @@ impl Application for AirDropdApp {
                 Command::none()
             }
 
+            Message::ShowAllDevicesChanged(value) => {
+                self.settings_view.set_show_all_devices(value);
+                Command::none()
+            }
+
             Message::SaveSettings => {
                 let save_err = {
                     let mut cfg = match self.services.config.write() {
@@ -1143,14 +1148,15 @@ impl AirDropdApp {
     async fn fetch_devices(
         services: Arc<crate::AirDropdServices>,
     ) -> Vec<crate::network::DiscoveredDevice> {
-        let (our_name, our_ip) = {
+        let (our_name, our_ip, show_all) = {
             let cfg = services.config.read().ok();
             let name = cfg
                 .as_ref()
                 .map(|c| c.broadcast_name.to_lowercase())
                 .unwrap_or_default();
+            let show_all = cfg.as_ref().map(|c| c.show_all_devices).unwrap_or(false);
             let ip = crate::network::util::primary_ipv4().ok();
-            (name, ip)
+            (name, ip, show_all)
         };
 
         let mut by_key: HashMap<String, crate::network::DiscoveredDevice> = HashMap::new();
@@ -1247,12 +1253,20 @@ impl AirDropdApp {
                 }
             }
 
+            // Accessories (AirPods, AirTags, Find My beacons) only show when
+            // "Show all nearby devices" is enabled — the lost-device finder.
+            if ble.accessory_label.is_some() && !show_all {
+                continue;
+            }
+
             // iPhones and iPads never include a name in their Continuity
             // beacons and only advertise AirDrop over AWDL (not regular
             // Wi-Fi), so a nameless Apple beacon is how an iPhone looks
             // from Windows. Surface it instead of dropping it.
             let name = if !ble.name.is_empty() {
                 ble.name.clone()
+            } else if let Some(label) = ble.accessory_label {
+                format!("{} {}", label, short_ble_suffix(&ble.id))
             } else if ble.apple {
                 format!("Apple device {}", short_ble_suffix(&ble.id))
             } else {
@@ -1265,6 +1279,9 @@ impl AirDropdApp {
             }
             if ble.airdrop_active {
                 txt_records.insert("airdrop_active".to_string(), "1".to_string());
+            }
+            if ble.accessory_label.is_some() {
+                txt_records.insert("accessory".to_string(), "1".to_string());
             }
 
             let key = format!("ble:{}", ble.id);

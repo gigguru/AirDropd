@@ -277,8 +277,12 @@ fn walk_dir(dir: &Path, rel_base: &str, out: &mut Vec<SendEntry>) -> Result<()> 
     Ok(())
 }
 
-/// Write all entries as a gzip-compressed newc cpio archive, streaming file
+/// Write all entries as a gzip-compressed cpio archive, streaming file
 /// contents so memory stays flat regardless of transfer size.
+///
+/// Uses the odc (old portable ASCII) cpio format — the libarchive default
+/// that Apple's sharingd produces and that OpenDrop validated against real
+/// iOS/macOS receivers.
 fn build_archive(entries: &[SendEntry], out_path: &Path) -> Result<()> {
     use flate2::write::GzEncoder;
     use flate2::Compression;
@@ -287,6 +291,7 @@ fn build_archive(entries: &[SendEntry], out_path: &Path) -> Result<()> {
 
     let file = std::fs::File::create(out_path)?;
     let mut gz = GzEncoder::new(BufWriter::new(file), Compression::default());
+    let mut ino = 1usize;
 
     // Directory records first so extractors recreate the tree.
     let mut dirs_written: HashSet<String> = HashSet::new();
@@ -303,15 +308,16 @@ fn build_archive(entries: &[SendEntry], out_path: &Path) -> Result<()> {
         }
         for dir in ancestors.into_iter().rev() {
             if dirs_written.insert(dir.clone()) {
-                write_newc_header(&mut gz, &format!("./{}", dir), 0o040755, 0)?;
-                pad_writer(&mut gz, 0)?;
+                write_odc_header(&mut gz, &format!("./{}", dir), 0o040755, 0, ino)?;
+                ino += 1;
             }
         }
     }
 
     for entry in entries {
         let store_path = format!("./{}", entry.rel.replace('\\', "/"));
-        write_newc_header(&mut gz, &store_path, 0o100644, entry.size as usize)?;
+        write_odc_header(&mut gz, &store_path, 0o100644, entry.size as usize, ino)?;
+        ino += 1;
 
         let mut src = std::fs::File::open(&entry.abs)
             .with_context(|| format!("open {}", entry.abs.display()))?;
@@ -330,54 +336,42 @@ fn build_archive(entries: &[SendEntry], out_path: &Path) -> Result<()> {
             let missing = (entry.size as usize).saturating_sub(copied);
             gz.write_all(&vec![0u8; missing])?;
         }
-        pad_writer(&mut gz, entry.size as usize)?;
     }
 
     // Trailer record ends the archive.
-    write_newc_header(&mut gz, "TRAILER!!!", 0, 0)?;
-    pad_writer(&mut gz, 0)?;
+    write_odc_header(&mut gz, "TRAILER!!!", 0, 0, 0)?;
 
     gz.finish()?.into_inner().map_err(|e| anyhow!("{}", e))?;
     Ok(())
 }
 
-fn write_newc_header<W: Write>(out: &mut W, name: &str, mode: u32, filesize: usize) -> Result<()> {
+/// odc header: magic `070707` + ten octal ASCII fields, no padding.
+fn write_odc_header<W: Write>(
+    out: &mut W,
+    name: &str,
+    mode: u32,
+    filesize: usize,
+    ino: usize,
+) -> Result<()> {
     let name_bytes = name.as_bytes();
-    let namesize = name_bytes.len() + 1;
+    let namesize = name_bytes.len() + 1; // includes trailing NUL
 
-    let mut header = Vec::with_capacity(110 + namesize + 3);
-    header.extend_from_slice(b"070701");
-    let fields: [usize; 13] = [
-        0,               // ino
-        mode as usize,   // mode
-        0,               // uid
-        0,               // gid
-        1,               // nlink
-        0,               // mtime
-        filesize,        // filesize
-        0,               // devmajor
-        0,               // devminor
-        0,               // rdevmajor
-        0,               // rdevminor
-        namesize,        // namesize
-        0,               // check
-    ];
-    for field in fields {
-        header.extend_from_slice(format!("{:08x}", field).as_bytes());
-    }
-    out.write_all(&header)?;
+    let header = format!(
+        "070707{:06o}{:06o}{:06o}{:06o}{:06o}{:06o}{:06o}{:011o}{:06o}{:011o}",
+        0,                  // dev
+        ino & 0o777777,     // ino
+        mode,               // mode
+        0,                  // uid
+        0,                  // gid
+        1,                  // nlink
+        0,                  // rdev
+        0,                  // mtime
+        namesize,           // namesize
+        filesize,           // filesize
+    );
+    out.write_all(header.as_bytes())?;
     out.write_all(name_bytes)?;
     out.write_all(&[0])?;
-    // Header (110) + name + NUL padded to 4 bytes.
-    let written = 110 + namesize;
-    let pad = (4 - (written % 4)) % 4;
-    out.write_all(&[0u8; 3][..pad])?;
-    Ok(())
-}
-
-fn pad_writer<W: Write>(out: &mut W, datasize: usize) -> Result<()> {
-    let pad = (4 - (datasize % 4)) % 4;
-    out.write_all(&[0u8; 3][..pad])?;
     Ok(())
 }
 
