@@ -14,3 +14,6 @@ path = "src/main.rs"
 
 [dependencies]
 airdropd-core = { path = "../core" }
+
+[build-dependencies]
+winres = "0.1"
