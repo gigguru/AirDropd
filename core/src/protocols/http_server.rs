@@ -237,6 +237,15 @@ async fn handle_discover(
     request: &HttpRequest,
     config: &SharedConfig,
 ) -> Result<()> {
+    let discoverable = config
+        .read()
+        .map_err(|_| anyhow!("config lock poisoned"))?
+        .discoverable;
+    if !discoverable {
+        write_response(stream, 503, &[], true).await?;
+        return Ok(());
+    }
+
     if !request.body.is_empty() {
         if let Ok(plist) = apple_plist::parse_plist(&request.body) {
             let sender = apple_plist::plist_string(&plist, "SenderComputerName")
@@ -270,6 +279,16 @@ async fn handle_ask(
     incoming_transfer: Option<Arc<crate::protocols::incoming_transfer::IncomingTransferService>>,
     received_tx: Option<tokio::sync::broadcast::Sender<PathBuf>>,
 ) -> Result<()> {
+    let discoverable = config
+        .read()
+        .map_err(|_| anyhow!("config lock poisoned"))?
+        .discoverable;
+    if !discoverable {
+        info!("AirDrop /Ask rejected — receiving is turned off");
+        write_response(stream, 503, &[], true).await?;
+        return Ok(());
+    }
+
     let details = crate::protocols::incoming_transfer::parse_ask_request(&request.body)
         .unwrap_or_else(|_| crate::protocols::incoming_transfer::IncomingTransferDetails {
             sender_name: "Unknown device".to_string(),

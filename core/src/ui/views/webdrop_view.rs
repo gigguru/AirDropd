@@ -12,6 +12,7 @@ use crate::ui::{messages::Message, styles, Theme};
 pub struct WebDropStatus {
     pub url: Option<String>,
     pub qr: Option<Handle>,
+    pub server_listening: bool,
 }
 
 pub fn render<'a>(status: &WebDropStatus, theme: &Theme) -> Element<'a, Message> {
@@ -32,8 +33,8 @@ pub fn render<'a>(status: &WebDropStatus, theme: &Theme) -> Element<'a, Message>
             let card = container(
                 column![
                     image(handle.clone())
-                        .width(Length::Fixed(300.0))
-                        .height(Length::Fixed(300.0)),
+                        .width(Length::Fixed(180.0))
+                        .height(Length::Fixed(180.0)),
                 ]
                 .align_items(Alignment::Center)
                 .padding(20),
@@ -47,13 +48,20 @@ pub fn render<'a>(status: &WebDropStatus, theme: &Theme) -> Element<'a, Message>
                 ..Default::default()
             });
 
-            column![
+            let mut below_qr = column![
                 card,
                 Space::with_height(16),
                 text(url.clone()).size(15).style(styles::text_color(*theme)),
             ]
-            .align_items(Alignment::Center)
-            .into()
+            .align_items(Alignment::Center);
+            if !status.server_listening {
+                below_qr = below_qr.push(
+                    text("Web Drop server is not running — restart AirDropd.")
+                        .size(13)
+                        .style(styles::text_color_muted(*theme)),
+                );
+            }
+            below_qr.into()
         }
         _ => container(
             text("Connect this PC to Wi-Fi to show a scan code.")
@@ -70,7 +78,7 @@ pub fn render<'a>(status: &WebDropStatus, theme: &Theme) -> Element<'a, Message>
             step(theme, "2", "Point it at the code above and tap the yellow banner"),
             step(theme, "3", "Pick photos, videos or files and tap Send"),
             Space::with_height(8),
-            text("The iPhone must be on the same Wi-Fi as this PC. Files arrive in your AirDropd download folder. Nothing leaves your network — no internet or app required.")
+            text("The phone must be on the same Wi-Fi as this computer (not cellular). On Mac: allow incoming connections for AirDropd in System Settings → Network → Firewall. If the page stays blank, confirm the URL IP matches Wi-Fi (usually 192.168.x.x).")
                 .size(12)
                 .style(styles::text_color_muted(*theme)),
         ]

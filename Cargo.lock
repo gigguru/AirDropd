@@ -140,6 +140,7 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "uuid",
+ "wgpu",
  "windows 0.48.0",
  "winres",
 ]
@@ -149,6 +150,7 @@ name = "airdropd-windows"
 version = "0.1.0"
 dependencies = [
  "airdropd-core",
+ "winres",
 ]
 
 [[package]]

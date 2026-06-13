@@ -5,6 +5,20 @@ use iced::window;
 
 pub const ICON_PNG: &[u8] = include_bytes!("../../../assets/airdropd-icon.png");
 
+static TOOLBAR_LOGO: std::sync::OnceLock<Handle> = std::sync::OnceLock::new();
+
+/// Logo for the main toolbar (cached from the embedded app icon).
+pub fn toolbar_logo() -> Handle {
+    TOOLBAR_LOGO
+        .get_or_init(|| {
+            let img = ::image::load_from_memory(ICON_PNG).expect("embedded toolbar icon");
+            let rgba = img.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            Handle::from_pixels(width, height, rgba.into_raw())
+        })
+        .clone()
+}
+
 const SPLASH_STEPS: usize = 35;
 
 /// Pre-rendered splash frames at increasing opacity (0 → 1).
@@ -42,7 +56,10 @@ impl SplashFrames {
         let idx = if tick < SPLASH_STEPS {
             tick
         } else {
-            (SPLASH_TOTAL_TICKS - 1 - tick).min(SPLASH_STEPS - 1)
+            SPLASH_TOTAL_TICKS
+                .saturating_sub(1)
+                .saturating_sub(tick)
+                .min(SPLASH_STEPS - 1)
         };
         &self.frames[idx]
     }

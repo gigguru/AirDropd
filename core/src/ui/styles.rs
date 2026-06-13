@@ -730,6 +730,96 @@ pub fn background(theme: AppTheme) -> Color {
     }
 }
 
+/// Active sonar/list tab — blue pill on the main toolbar.
+pub fn button_toolbar_tab(_theme: &Theme, status: ButtonStatus) -> ButtonAppearance {
+    match status {
+        ButtonStatus::Active | ButtonStatus::Hovered => ButtonAppearance {
+            background: Some(Background::Color(colors::PRIMARY)),
+            text_color: colors::WHITE,
+            border: Border {
+                color: colors::PRIMARY,
+                width: 0.0,
+                radius: Radius::from(8.0),
+            },
+            shadow_offset: Vector::new(0.0, 0.0),
+            shadow: Shadow::default(),
+        },
+        ButtonStatus::Pressed => ButtonAppearance {
+            background: Some(Background::Color(colors::PRIMARY_ACTIVE)),
+            text_color: colors::WHITE,
+            border: Border {
+                color: colors::PRIMARY_ACTIVE,
+                width: 0.0,
+                radius: Radius::from(8.0),
+            },
+            shadow_offset: Vector::new(0.0, 0.0),
+            shadow: Shadow::default(),
+        },
+        ButtonStatus::Disabled => ButtonAppearance {
+            background: Some(Background::Color(Color::from_rgba(
+                colors::PRIMARY.r,
+                colors::PRIMARY.g,
+                colors::PRIMARY.b,
+                0.45,
+            ))),
+            text_color: colors::TEXT_MUTED,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: Radius::from(8.0),
+            },
+            shadow_offset: Vector::new(0.0, 0.0),
+            shadow: Shadow::default(),
+        },
+    }
+}
+
+/// Plain toolbar navigation link.
+pub fn button_toolbar_link(_theme: &Theme, status: ButtonStatus) -> ButtonAppearance {
+    match status {
+        ButtonStatus::Active => ButtonAppearance {
+            background: None,
+            text_color: colors::TEXT_PRIMARY,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: Radius::from(6.0),
+            },
+            shadow_offset: Vector::new(0.0, 0.0),
+            shadow: Shadow::default(),
+        },
+        ButtonStatus::Hovered => ButtonAppearance {
+            background: Some(Background::Color(Color::from_rgba(1.0, 1.0, 1.0, 0.06))),
+            text_color: colors::WHITE,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: Radius::from(6.0),
+            },
+            shadow_offset: Vector::new(0.0, 0.0),
+            shadow: Shadow::default(),
+        },
+        ButtonStatus::Pressed => ButtonAppearance {
+            background: Some(Background::Color(Color::from_rgba(1.0, 1.0, 1.0, 0.10))),
+            text_color: colors::TEXT_PRIMARY,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: Radius::from(6.0),
+            },
+            shadow_offset: Vector::new(0.0, 0.0),
+            shadow: Shadow::default(),
+        },
+        ButtonStatus::Disabled => ButtonAppearance {
+            background: None,
+            text_color: colors::TEXT_MUTED,
+            border: Border::default(),
+            shadow_offset: Vector::new(0.0, 0.0),
+            shadow: Shadow::default(),
+        },
+    }
+}
+
 /// Theme-aware primary text color
 pub fn text_color(theme: AppTheme) -> Color {
     match theme {

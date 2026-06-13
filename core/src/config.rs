@@ -7,6 +7,81 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+/// Who can discover this PC and which nearby devices appear on the radar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryMode {
+    /// Visible to everyone on the network; show phones, Macs, and reachable peers.
+    Everyone,
+    /// Visible with contacts-only receiver flags (best-effort without Apple signing).
+    ContactsOnly,
+    /// Stop advertising — this PC does not appear in others' AirDrop sheets.
+    ReceivingOff,
+    /// Radar shows Apple phones, tablets, and Macs only.
+    AppleDevices,
+    /// Radar shows Android BLE peers only.
+    AndroidDevices,
+    /// Radar shows AirTags and Find My beacons (live RSSI for locating).
+    AirTags,
+}
+
+impl Default for DiscoveryMode {
+    fn default() -> Self {
+        Self::Everyone
+    }
+}
+
+impl DiscoveryMode {
+    pub fn discoverable(&self) -> bool {
+        !matches!(self, Self::ReceivingOff)
+    }
+
+    pub fn contacts_only(&self) -> bool {
+        matches!(self, Self::ContactsOnly)
+    }
+
+    pub fn device_filter(&self) -> DeviceFilter {
+        match self {
+            Self::AppleDevices => DeviceFilter::Apple,
+            Self::AndroidDevices => DeviceFilter::Android,
+            Self::AirTags => DeviceFilter::AirTags,
+            _ => DeviceFilter::All,
+        }
+    }
+
+    /// Whether BLE accessories (AirPods, AirTags, …) should be collected at all.
+    pub fn include_accessories(&self, show_all_devices: bool) -> bool {
+        matches!(self, Self::AirTags) || show_all_devices
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Everyone => "Everyone",
+            Self::ContactsOnly => "Contacts Only",
+            Self::ReceivingOff => "No One",
+            Self::AppleDevices => "Peer Devices Only",
+            Self::AndroidDevices => "Android Only",
+            Self::AirTags => "Trackers Only",
+        }
+    }
+}
+
+impl std::fmt::Display for DiscoveryMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
+/// Filters applied to the nearby-device radar list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DeviceFilter {
+    #[default]
+    All,
+    Apple,
+    Android,
+    AirTags,
+}
+
 pub type SharedConfig = Arc<RwLock<AppConfig>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +116,9 @@ pub struct AppConfig {
     /// Automatically accept incoming AirDrop transfers without prompting.
     #[serde(default)]
     pub auto_accept_incoming: bool,
+    /// Discovery visibility and nearby-device filter (main-view picker).
+    #[serde(default)]
+    pub discovery_mode: DiscoveryMode,
     /// Show every nearby Apple device on the radar, including accessories
     /// (AirPods, AirTags, Apple Watch) — useful for locating a lost device.
     #[serde(default)]
@@ -69,6 +147,7 @@ impl Default for AppConfig {
             firewall_exceptions_added: false,
             firewall_prompt_dismissed: false,
             auto_accept_incoming: false,
+            discovery_mode: DiscoveryMode::Everyone,
             show_all_devices: false,
             webdrop_devices: HashMap::new(),
         }
@@ -124,6 +203,7 @@ impl AppConfig {
         match Self::load_from_disk() {
             Ok(mut cfg) => {
                 cfg.ensure_identity();
+                cfg.migrate_discovery_mode();
                 cfg
             }
             Err(e) => {
@@ -144,7 +224,28 @@ impl AppConfig {
         let text = std::fs::read_to_string(&path)?;
         let mut cfg: AppConfig = toml::from_str(&text).context("parse config.toml")?;
         cfg.ensure_identity();
+        cfg.migrate_discovery_mode();
         Ok(cfg)
+    }
+
+    /// Keep legacy `discoverable` / `contacts_only` flags aligned with `discovery_mode`.
+    pub fn migrate_discovery_mode(&mut self) {
+        if !self.discoverable && self.discovery_mode == DiscoveryMode::Everyone {
+            self.discovery_mode = DiscoveryMode::ReceivingOff;
+        } else if self.contacts_only && self.discovery_mode == DiscoveryMode::Everyone {
+            self.discovery_mode = DiscoveryMode::ContactsOnly;
+        }
+        self.sync_discovery_flags();
+    }
+
+    pub fn set_discovery_mode(&mut self, mode: DiscoveryMode) {
+        self.discovery_mode = mode;
+        self.sync_discovery_flags();
+    }
+
+    pub fn sync_discovery_flags(&mut self) {
+        self.discoverable = self.discovery_mode.discoverable();
+        self.contacts_only = self.discovery_mode.contacts_only();
     }
 
     pub fn save(&self) -> Result<()> {
@@ -159,6 +260,21 @@ impl AppConfig {
 
     pub fn receive_dir(&self) -> PathBuf {
         self.download_dir.join("AirDropd")
+    }
+
+    /// QR / Web Drop uploads: `{download_dir}/AirDropd/WebDrop/`.
+    pub fn webdrop_dir(&self) -> PathBuf {
+        self.receive_dir().join("WebDrop")
+    }
+
+    /// Example default layout shown in Settings.
+    pub fn default_save_paths_hint() -> String {
+        let base = default_download_dir();
+        format!(
+            "{}/AirDropd/  ·  {}/AirDropd/WebDrop/",
+            base.display(),
+            base.display()
+        )
     }
 
     pub fn ensure_receive_dir(&self) -> Result<PathBuf> {
@@ -206,6 +322,33 @@ impl AppConfig {
         let dir = webdrop_root.join(&name);
         std::fs::create_dir_all(&dir)?;
         Ok(dir)
+    }
+
+    /// Rename a guest folder under WebDrop and update the device-id mapping.
+    pub fn rename_webdrop_folder(&mut self, old_folder: &str, new_label: &str) -> Result<PathBuf> {
+        let new_folder = sanitize_folder_name(new_label);
+        if new_folder.is_empty() {
+            anyhow::bail!("invalid folder name");
+        }
+        let root = self.webdrop_dir();
+        let old_path = root.join(old_folder);
+        if !old_path.is_dir() {
+            anyhow::bail!("folder not found: {old_folder}");
+        }
+        let new_path = root.join(&new_folder);
+        if new_path.exists() && old_path != new_path {
+            anyhow::bail!("a folder named \"{new_folder}\" already exists");
+        }
+        if old_path != new_path {
+            std::fs::rename(&old_path, &new_path)?;
+        }
+        for folder in self.webdrop_devices.values_mut() {
+            if folder == old_folder {
+                *folder = new_folder.clone();
+            }
+        }
+        self.save()?;
+        Ok(new_path)
     }
 }
 

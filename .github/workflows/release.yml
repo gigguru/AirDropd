@@ -19,15 +19,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-      - name: Build and zip AirDropd.app
+      - name: Build and package macOS
+        env:
+          MACOS_TARGET: universal
         run: |
-          chmod +x apple/build-macos.sh
+          chmod +x apple/build-macos.sh apple/packaging/make-dmg.sh
           ./apple/build-macos.sh
+          MACOS_TARGET=aarch64-apple-darwin ./apple/build-macos.sh
+          MACOS_TARGET=x86_64-apple-darwin ./apple/build-macos.sh
           ls -la dist/
       - uses: actions/upload-artifact@v7
         with:
-          name: AirDropd-macos-aarch64
-          path: dist/AirDropd-macos-arm64.zip
+          name: AirDropd-macos
+          path: |
+            dist/AirDropd-macos-arm64.zip
+            dist/AirDropd-macos-x86_64.zip
+            dist/AirDropd-macos-universal.zip
+            dist/AirDropd Setup.dmg
           if-no-files-found: error
 
   build-windows:
@@ -46,6 +54,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target\release\AirDropd.exe dist\AirDropd.exe
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "windows\installer\AirDropd.iss"
       - uses: actions/upload-artifact@v7
         with:
@@ -68,7 +77,10 @@ jobs:
       - name: Flatten artifacts
         run: |
           mkdir -p release
-          cp artifacts/AirDropd-macos-aarch64/AirDropd-macos-arm64.zip release/
+          cp artifacts/AirDropd-macos/AirDropd-macos-arm64.zip release/
+          cp artifacts/AirDropd-macos/AirDropd-macos-x86_64.zip release/
+          cp artifacts/AirDropd-macos/AirDropd-macos-universal.zip release/
+          cp "artifacts/AirDropd-macos/AirDropd Setup.dmg" release/
           cp artifacts/AirDropd-windows-x86_64/AirDropd.exe release/
           cp "artifacts/AirDropd-windows-x86_64/AirDropd Setup.exe" release/
           ls -la release/
@@ -82,6 +94,9 @@ jobs:
           generate_release_notes: true
           files: |
             release/AirDropd-macos-arm64.zip
+            release/AirDropd-macos-x86_64.zip
+            release/AirDropd-macos-universal.zip
+            release/AirDropd Setup.dmg
             release/AirDropd.exe
             release/AirDropd Setup.exe
         env:

@@ -1,35 +1,43 @@
-//! Main view — macOS AirDrop-style layout.
-//!
-//! Interactive radar with devices placed by distance, drag-and-drop sending,
-//! action sheet for the selected device, and modal overlays for incoming
-//! transfers, link sending, and drop-recipient selection.
+//! Main view — sonar radar or sortable device list, with a device detail modal.
 
 use iced::{
     widget::{
-        button, column, container, pick_list, row, scrollable, text, text_input, Space,
+        button, column, container, horizontal_rule, image, pick_list, row, scrollable, svg,
+        text, text_input, Space,
     },
     Alignment, Element, Length, Theme as IcedTheme,
 };
 
 use crate::ui::{
+    assets,
     components,
+    distance,
+    icons,
     messages::{Message, NotificationMessage},
     radar,
     styles,
     widgets,
     Theme,
 };
+use crate::ui::views::{device_form, device_list_view};
+use crate::ui::views::device_list_view::{DeviceViewMode, ListSortColumn};
 use crate::ui::views::settings_view::AirDropVisibility;
 
-const VISIBILITY_OPTIONS: [AirDropVisibility; 3] = [
+const VISIBILITY_OPTIONS: [AirDropVisibility; 6] = [
     AirDropVisibility::Everyone,
     AirDropVisibility::ContactsOnly,
     AirDropVisibility::ReceivingOff,
+    AirDropVisibility::AppleDevices,
+    AirDropVisibility::AndroidDevices,
+    AirDropVisibility::AirTags,
 ];
 
 pub struct MainView<'a> {
     discovered_devices: &'a [crate::network::DiscoveredDevice],
     selected_device: Option<&'a crate::network::DiscoveredDevice>,
+    device_view_mode: DeviceViewMode,
+    list_sort_column: ListSortColumn,
+    list_sort_ascending: bool,
     is_scanning: bool,
     sonar_tick: u32,
     airdrop_status: &'a crate::protocols::airdrop::AirDropStatus,
@@ -41,12 +49,16 @@ pub struct MainView<'a> {
     pending_recipient_files: Option<&'a [std::path::PathBuf]>,
     drop_hover: bool,
     visibility: AirDropVisibility,
+    discovery_frozen: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn render<'a>(
     discovered_devices: &'a [crate::network::DiscoveredDevice],
     selected_device: Option<&'a crate::network::DiscoveredDevice>,
+    device_view_mode: DeviceViewMode,
+    list_sort_column: ListSortColumn,
+    list_sort_ascending: bool,
     is_scanning: bool,
     sonar_tick: u32,
     airdrop_status: &'a crate::protocols::airdrop::AirDropStatus,
@@ -58,11 +70,15 @@ pub fn render<'a>(
     pending_recipient_files: Option<&'a [std::path::PathBuf]>,
     drop_hover: bool,
     visibility: AirDropVisibility,
+    discovery_frozen: bool,
     theme: &Theme,
 ) -> Element<'a, Message> {
     MainView {
         discovered_devices,
         selected_device,
+        device_view_mode,
+        list_sort_column,
+        list_sort_ascending,
         is_scanning,
         sonar_tick,
         airdrop_status,
@@ -74,6 +90,7 @@ pub fn render<'a>(
         pending_recipient_files,
         drop_hover,
         visibility,
+        discovery_frozen,
     }
     .view(theme)
 }
@@ -176,19 +193,47 @@ pub fn incoming_transfer_overlay<'a>(
 }
 
 /// Dim the whole window behind a centered dialog.
-fn scrim(dialog: Element<'_, Message>) -> Element<'_, Message> {
+pub fn scrim(dialog: Element<'_, Message>) -> Element<'_, Message> {
+    dismissible_scrim(dialog, None)
+}
+
+/// Modal scrim with optional click-outside-to-dismiss on the backdrop only.
+pub fn dismissible_scrim<'a>(
+    dialog: Element<'a, Message>,
+    on_dismiss: Option<Message>,
+) -> Element<'a, Message> {
+    use iced::widget::{mouse_area, Space};
+
+    let backdrop = |width: Length, height: Length| -> Element<'a, Message> {
+        let panel = container(Space::new(width, height))
+            .width(width)
+            .height(height);
+        if let Some(msg) = on_dismiss.clone() {
+            mouse_area(panel).on_press(msg).into()
+        } else {
+            panel.into()
+        }
+    };
+
     container(
-        container(dialog)
-            .center_x()
-            .center_y()
-            .width(Length::Fill)
-            .height(Length::Fill),
+        column![
+            backdrop(Length::Fill, Length::FillPortion(1)),
+            row![
+                backdrop(Length::FillPortion(1), Length::Shrink),
+                dialog,
+                backdrop(Length::FillPortion(1), Length::Shrink),
+            ]
+            .align_items(Alignment::Center),
+            backdrop(Length::Fill, Length::FillPortion(1)),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill),
     )
     .width(Length::Fill)
     .height(Length::Fill)
     .style(|_: &IcedTheme| container::Appearance {
         background: Some(iced::Background::Color(iced::Color::from_rgba(
-            0.0, 0.0, 0.0, 0.55,
+            0.0, 0.0, 0.0, 0.48,
         ))),
         ..Default::default()
     })
@@ -203,31 +248,32 @@ impl<'a> MainView<'a> {
         };
         let bg = styles::background(*theme);
 
-        let body = column![
-            self.toolbar(theme),
-            container(radar::radar(
+        let device_area: Element<'a, Message> = match self.device_view_mode {
+            DeviceViewMode::Sonar => container(radar::radar(
                 self.discovered_devices,
                 self.selected_device,
-                self.is_scanning,
+                !self.discovery_frozen,
                 self.sonar_tick,
                 &iced_theme,
                 self.drop_hover,
             ))
             .width(Length::Fill)
-            .height(Length::FillPortion(1)),
-            self.status_line(theme),
-            if self.selected_device.is_some() {
-                self.action_sheet(theme)
-            } else {
-                Space::with_height(0).into()
-            },
-            if let Some(progress) = self.file_transfer_progress {
-                self.transfer_progress(progress, theme)
-            } else {
-                Space::with_height(0).into()
-            },
-            self.discovery_bar(theme),
-            components::copyright_footer(theme),
+            .height(Length::FillPortion(1))
+            .into(),
+            DeviceViewMode::List => device_list_view::render(
+                self.discovered_devices,
+                self.selected_device,
+                self.list_sort_column,
+                self.list_sort_ascending,
+                self.discovery_frozen,
+                theme,
+            ),
+        };
+
+        let body = column![
+            self.toolbar(theme),
+            device_area,
+            self.footer(theme),
         ]
         .spacing(0)
         .width(Length::Fill)
@@ -236,7 +282,7 @@ impl<'a> MainView<'a> {
         let content = container(body)
             .width(Length::Fill)
             .height(Length::Fill)
-            .padding([12, 20, 8, 20])
+            .padding([6, 18, 6, 18])
             .style(move |_: &IcedTheme| iced::widget::container::Appearance {
                 background: Some(iced::Background::Color(bg)),
                 ..Default::default()
@@ -246,25 +292,95 @@ impl<'a> MainView<'a> {
             incoming_transfer_overlay(incoming)
         } else if let Some(files) = self.pending_recipient_files {
             self.recipient_chooser(files, &iced_theme, theme)
-        } else if self.show_link_dialog {
-            self.link_dialog(theme)
         } else {
-            content.into()
+            let base: Element<'a, Message> = content.into();
+            let with_device = if let Some(device) = self.selected_device {
+                device_form::overlay(
+                    device,
+                    self.drop_hover,
+                    self.file_transfer_progress,
+                    self.airdrop_status,
+                    theme,
+                )
+            } else {
+                base
+            };
+
+            if self.show_link_dialog {
+                self.link_dialog(theme)
+            } else {
+                with_device
+            }
         }
     }
 
+    fn footer(&self, theme: &Theme) -> Element<'a, Message> {
+        column![
+            self.status_line(theme),
+            Space::with_height(Length::Fixed(4.0)),
+            row![
+                self.discovery_bar(theme),
+                Space::with_width(Length::Fill),
+            ]
+            .align_items(Alignment::Center)
+            .width(Length::Fill),
+            components::copyright_footer(theme),
+        ]
+        .spacing(0)
+        .width(Length::Fill)
+        .into()
+    }
+
     fn status_line(&self, theme: &Theme) -> Element<'a, Message> {
-        let status_text = if self.drop_hover {
+        let filter_hint = match self.visibility.device_filter() {
+            crate::config::DeviceFilter::All => String::new(),
+            crate::config::DeviceFilter::Apple => " — peer devices only".to_string(),
+            crate::config::DeviceFilter::Android => " — Android devices only".to_string(),
+            crate::config::DeviceFilter::AirTags => {
+                " — trackers only (distance updates as you move)".to_string()
+            }
+        };
+        let status_text = if self.discovery_frozen {
+            "Discovery frozen — device list and sonar sweep paused".to_string()
+        } else if self.drop_hover && self.selected_device.is_some() {
+            "Release to send the files".to_string()
+        } else if self.drop_hover {
             "Release to send the files".to_string()
         } else if self.is_scanning {
-            "Looking for others…".to_string()
+            format!("Looking for others…{filter_hint}")
         } else if self.discovered_devices.is_empty() {
-            "No devices found — open AirDrop on your iPhone or Mac".to_string()
+            if self.visibility == AirDropVisibility::AirTags {
+                "No trackers nearby — enable “Show all nearby devices” in Settings if needed"
+                    .to_string()
+            } else if self.visibility == AirDropVisibility::AndroidDevices {
+                "No Android devices found nearby".to_string()
+            } else if self.visibility == AirDropVisibility::AppleDevices {
+                "No peer devices found — ask others to turn on sharing".to_string()
+            } else if self.visibility == AirDropVisibility::ReceivingOff {
+                "Receiving off — you won't appear in others' share lists".to_string()
+            } else {
+                "No devices found — ask others to turn on sharing".to_string()
+            }
         } else {
+            let mode_hint = match self.device_view_mode {
+                DeviceViewMode::Sonar => "tap a device on the sonar",
+                DeviceViewMode::List => "tap a row in the list",
+            };
+            let closest = self
+                .discovered_devices
+                .iter()
+                .filter_map(|d| d.rssi.map(crate::ui::distance::rssi_to_feet))
+                .min();
+            let distance_hint = closest
+                .map(|feet| format!(" — closest ~{}", distance::format_feet(feet)))
+                .unwrap_or_default();
             format!(
-                "{} device{} nearby — tap a device or drop files on it",
+                "{} device{} nearby — {}{}{}",
                 self.discovered_devices.len(),
-                if self.discovered_devices.len() == 1 { "" } else { "s" }
+                if self.discovered_devices.len() == 1 { "" } else { "s" },
+                mode_hint,
+                distance_hint,
+                filter_hint
             )
         };
         container(
@@ -275,63 +391,121 @@ impl<'a> MainView<'a> {
         )
         .width(Length::Fill)
         .center_x()
-        .padding([4, 0])
+        .padding([8, 0, 2, 0])
+        .into()
+    }
+
+    fn toolbar_nav_tab(
+        &self,
+        label: &'static str,
+        mode: DeviceViewMode,
+        theme: &Theme,
+    ) -> Element<'a, Message> {
+        let active = self.device_view_mode == mode;
+        button(
+            text(label)
+                .size(13)
+                .style(if active {
+                    iced::Color::WHITE
+                } else {
+                    styles::text_color(*theme)
+                }),
+        )
+        .on_press(Message::SetDeviceViewMode(mode))
+        .style(if active {
+            iced::theme::Button::Primary
+        } else {
+            iced::theme::Button::Text
+        })
+        .padding([6, 14])
+        .into()
+    }
+
+    fn toolbar_nav_link(
+        &self,
+        label: &'static str,
+        message: Message,
+        theme: &Theme,
+        accent: Option<iced::Color>,
+    ) -> Element<'a, Message> {
+        button(
+            text(label)
+                .size(13)
+                .style(accent.unwrap_or_else(|| styles::text_color(*theme))),
+        )
+        .on_press(message)
+        .style(iced::theme::Button::Text)
+        .padding([6, 10])
+        .into()
+    }
+
+    fn toolbar_icon_button(
+        svg_handle: iced::widget::svg::Handle,
+        message: Message,
+    ) -> Element<'static, Message> {
+        button(svg(svg_handle).width(18).height(18))
+            .on_press(message)
+            .style(iced::theme::Button::Text)
+            .padding([6, 8])
+            .into()
+    }
+
+    fn freeze_control(&self, _theme: &Theme) -> Element<'static, Message> {
+        const ICE: iced::Color = iced::Color::from_rgb(0.58, 0.84, 0.98);
+        button(
+            text("Freeze")
+                .size(13)
+                .style(if self.discovery_frozen {
+                    iced::Color::WHITE
+                } else {
+                    ICE
+                }),
+        )
+        .on_press(Message::ToggleDiscoveryFreeze)
+        .style(if self.discovery_frozen {
+            iced::theme::Button::Primary
+        } else {
+            iced::theme::Button::Text
+        })
+        .padding([6, 10])
         .into()
     }
 
     fn toolbar(&self, theme: &Theme) -> Element<'a, Message> {
+        let logo = container(
+            image(assets::toolbar_logo())
+                .height(Length::Fixed(34.0))
+                .width(Length::Fixed(34.0)),
+        )
+        .center_y()
+        .padding([0, 2]);
+
         let mut bar = row![
-            Space::with_width(Length::Fixed(32.0)),
-            text("AirDrop")
-                .size(13)
-                .style(styles::text_color_secondary(*theme)),
+            logo,
+            Space::with_width(Length::Fixed(10.0)),
+            self.toolbar_nav_tab("Sonar", DeviceViewMode::Sonar, theme),
+            self.toolbar_nav_tab("List", DeviceViewMode::List, theme),
+            self.freeze_control(theme),
+            self.toolbar_nav_link("DJ Mode", Message::ShowDjMode, theme, None),
+            self.toolbar_nav_link("Receive via QR", Message::ShowWebDrop, theme, None),
+            self.toolbar_nav_link("Activity", Message::ShowActivity, theme, None),
             Space::with_width(Length::Fill),
-            button(
-                text("DJ Mode")
-                    .size(12)
-                    .style(styles::text_color_secondary(*theme))
-            )
-            .on_press(Message::ShowDjMode)
-            .style(iced::theme::Button::Text)
-            .padding([4, 8]),
-            button(
-                text("Receive via QR")
-                    .size(12)
-                    .style(styles::text_color_secondary(*theme))
-            )
-            .on_press(Message::ShowWebDrop)
-            .style(iced::theme::Button::Text)
-            .padding([4, 8]),
-            button(
-                text("Activity")
-                    .size(12)
-                    .style(styles::text_color_secondary(*theme))
-            )
-            .on_press(Message::ShowActivity)
-            .style(iced::theme::Button::Text)
-            .padding([4, 8]),
-            button(
-                text("⚙")
-                    .size(16)
-                    .style(styles::text_color_secondary(*theme))
-            )
-            .on_press(Message::ShowSettings)
-            .style(iced::theme::Button::Text)
-            .padding([4, 8]),
-            button(
-                text(if self.is_scanning { "Stop" } else { "Refresh" })
-                    .size(12)
-                    .style(styles::text_color_secondary(*theme))
-            )
-            .on_press(if self.is_scanning {
-                Message::StopScanning
-            } else {
-                Message::StartScanning
-            })
-            .style(iced::theme::Button::Text)
-            .padding([4, 8]),
+            Self::toolbar_icon_button(icons::folder(), Message::OpenReceiveFolder),
+            Self::toolbar_icon_button(icons::settings(), Message::ShowSettings),
+            self.toolbar_nav_link(
+                if self.is_scanning { "Stop" } else { "Refresh" },
+                if self.is_scanning {
+                    Message::StopScanning
+                } else {
+                    Message::StartScanning
+                },
+                theme,
+                None,
+            ),
+            self.toolbar_nav_link("About", Message::ShowAbout, theme, None),
         ]
-        .align_items(Alignment::Center);
+        .align_items(Alignment::Center)
+        .spacing(2);
 
         if !self.notifications.is_empty() {
             if let Some(n) = self.notifications.last() {
@@ -343,122 +517,53 @@ impl<'a> MainView<'a> {
             }
         }
 
-        bar.into()
-    }
-
-    fn action_sheet(&self, theme: &Theme) -> Element<'a, Message> {
-        let device = match self.selected_device {
-            Some(d) => d,
-            None => return Space::with_height(0).into(),
-        };
-
-        let surface = styles::surface(*theme);
-        let idle = matches!(
-            self.airdrop_status,
-            crate::protocols::airdrop::AirDropStatus::Idle
-                | crate::protocols::airdrop::AirDropStatus::Connected
-        );
-        let ble_only = device.address.is_unspecified() || device.port == 0;
-
-        let hint: Element<'a, Message> = if ble_only {
-            text(
-                "Detected via Bluetooth. iPhones/iPads only accept AirDrop over \
-                 Apple's peer-to-peer Wi-Fi, so transfers must start from that \
-                 device: open its Share sheet and pick this PC.",
-            )
-            .size(11)
-            .style(styles::text_color_muted(*theme))
-            .into()
-        } else {
-            Space::with_height(0).into()
-        };
-
-        let actions = column![
-            text(format!(
-                "{} {} · {}",
-                device.kind().emoji(),
-                device.name,
-                device.kind().label()
-            ))
-            .size(13)
-            .style(styles::text_color(*theme)),
-            Space::with_height(8),
-            row![
-                button(text("Send Files").size(12))
-                    .on_press_maybe(
-                        (idle && !ble_only).then(|| Message::SendFile(device.clone()))
-                    )
-                    .padding([6, 14]),
-                Space::with_width(8),
-                button(text("Send Folder").size(12))
-                    .on_press_maybe(
-                        (idle && !ble_only).then(|| Message::SendFolder(device.clone()))
-                    )
-                    .padding([6, 14]),
-                Space::with_width(8),
-                button(text("Send Link").size(12))
-                    .on_press_maybe((idle && !ble_only).then(|| Message::ShowLinkDialog))
-                    .padding([6, 14]),
-            ]
-            .align_items(Alignment::Center),
-            Space::with_height(4),
-            hint,
-        ]
-        .align_items(Alignment::Center)
-        .spacing(4);
-
-        container(actions)
-            .padding(12)
-            .width(Length::Fill)
-            .center_x()
-            .style(move |_: &IcedTheme| iced::widget::container::Appearance {
-                background: Some(iced::Background::Color(surface)),
-                border: iced::Border {
-                    radius: 10.0.into(),
-                    width: 1.0,
-                    color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.08),
-                },
-                ..Default::default()
-            })
-            .into()
-    }
-
-    fn transfer_progress(&self, progress: f32, theme: &Theme) -> Element<'a, Message> {
         container(
             column![
-                text("Transferring…")
-                    .size(12)
-                    .style(styles::text_color_secondary(*theme)),
-                components::primary_progress_bar(progress),
-                text(format!("{:.0}%", progress))
-                    .size(11)
-                    .style(styles::text_color_muted(*theme)),
+                bar,
+                horizontal_rule(1),
             ]
-            .align_items(Alignment::Center)
-            .spacing(4)
-            .padding(8),
+            .spacing(8),
         )
-        .width(Length::Fill)
-        .center_x()
-        .into()
+            .width(Length::Fill)
+            .padding([4, 0, 6, 0])
+            .into()
     }
 
     fn discovery_bar(&self, theme: &Theme) -> Element<'a, Message> {
+        let is_dark = *theme == Theme::Dark;
+        let dropdown_bg = if is_dark {
+            iced::Color::from_rgb(0.20, 0.20, 0.22)
+        } else {
+            iced::Color::from_rgb(0.92, 0.92, 0.94)
+        };
+
         row![
-            text("Allow me to be discovered by:")
+            text("Discovery:")
                 .size(12)
                 .style(styles::text_color_secondary(*theme)),
-            Space::with_width(8),
-            pick_list(
-                &VISIBILITY_OPTIONS[..],
-                Some(self.visibility),
-                Message::VisibilityChanged,
+            Space::with_width(Length::Fixed(8.0)),
+            container(
+                pick_list(
+                    &VISIBILITY_OPTIONS[..],
+                    Some(self.visibility),
+                    Message::VisibilityChanged,
+                )
+                .text_size(12)
+                .placeholder("Everyone"),
             )
-            .text_size(12)
-            .placeholder("Everyone"),
+            .padding([4, 10])
+            .style(move |_: &IcedTheme| iced::widget::container::Appearance {
+                background: Some(iced::Background::Color(dropdown_bg)),
+                border: iced::Border {
+                    color: iced::Color::from_rgba(1.0, 1.0, 1.0, if is_dark { 0.14 } else { 0.20 }),
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..Default::default()
+            }),
         ]
         .align_items(Alignment::Center)
-        .padding([12, 0, 4, 0])
+        .padding([6, 0, 2, 0])
         .into()
     }
 
@@ -484,7 +589,7 @@ impl<'a> MainView<'a> {
             .iter()
             .cloned()
             .fold(column![].spacing(8).width(Length::Fill), |col, device| {
-                let reachable = !device.address.is_unspecified() && device.port > 0;
+                let reachable = device.is_reachable();
                 let kind = device.kind().label();
                 let subtitle = if reachable {
                     format!("{} — Ready to receive", kind)
@@ -494,7 +599,7 @@ impl<'a> MainView<'a> {
                 let icon = widgets::device_icon(&device);
                 let msg = Message::ChooseRecipient(device.clone());
                 col.push(widgets::device_list_row(
-                    &device.name,
+                    &device.display_title(),
                     icon,
                     &subtitle,
                     false,
@@ -536,22 +641,38 @@ impl<'a> MainView<'a> {
 
     fn link_dialog(&self, theme: &Theme) -> Element<'a, Message> {
         let surface = styles::surface(*theme);
+        let is_dark = *theme == Theme::Dark;
+        let border_subtle = if is_dark {
+            iced::Color::from_rgba(1.0, 1.0, 1.0, 0.10)
+        } else {
+            iced::Color::from_rgba(0.0, 0.0, 0.0, 0.10)
+        };
 
         let dialog = container(
             column![
-                text("Send Link")
-                    .size(15)
-                    .style(styles::text_color(*theme)),
-                Space::with_height(12),
-                text_input("Enter URL…", self.link_url)
+                row![
+                    text("Send Link")
+                        .size(16)
+                        .style(styles::text_color(*theme)),
+                    Space::with_width(Length::Fill),
+                    button(svg(icons::close()).width(16).height(16))
+                        .on_press(Message::HideLinkDialog)
+                        .style(iced::theme::Button::Text)
+                        .padding([4, 4]),
+                ]
+                .align_items(Alignment::Center)
+                .width(Length::Fill),
+                Space::with_height(14),
+                text_input("https://…", self.link_url)
                     .on_input(Message::LinkInputChanged)
                     .width(Length::Fill)
-                    .padding(8),
-                Space::with_height(12),
+                    .padding(10),
+                Space::with_height(16),
                 row![
                     button(text("Cancel").size(12))
                         .on_press(Message::HideLinkDialog)
-                        .padding([6, 16]),
+                        .style(iced::theme::Button::Text)
+                        .padding([8, 16]),
                     Space::with_width(Length::Fill),
                     button(text("Send").size(12))
                         .on_press_maybe(if !self.link_url.trim().is_empty() {
@@ -560,29 +681,32 @@ impl<'a> MainView<'a> {
                         } else {
                             None
                         })
-                        .padding([6, 16]),
+                        .style(iced::theme::Button::Primary)
+                        .padding([8, 20]),
                 ]
-                .align_items(Alignment::Center),
+                .align_items(Alignment::Center)
+                .width(Length::Fill),
             ]
             .spacing(4)
-            .max_width(360),
+            .width(Length::Fill),
         )
-        .padding(20)
+        .padding(22)
+        .width(Length::Fixed(380.0))
         .style(move |_: &IcedTheme| iced::widget::container::Appearance {
             background: Some(iced::Background::Color(surface)),
             border: iced::Border {
-                radius: 12.0.into(),
+                radius: 14.0.into(),
                 width: 1.0,
-                color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.12),
+                color: border_subtle,
             },
             shadow: iced::Shadow {
-                color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.25),
-                offset: iced::Vector::new(0.0, 4.0),
-                blur_radius: 16.0,
+                color: iced::Color::from_rgba(0.0, 0.0, 0.0, if is_dark { 0.55 } else { 0.18 }),
+                offset: iced::Vector::new(0.0, 12.0),
+                blur_radius: 32.0,
             },
             ..Default::default()
         });
 
-        scrim(dialog.into())
+        dismissible_scrim(dialog.into(), Some(Message::HideLinkDialog))
     }
 }

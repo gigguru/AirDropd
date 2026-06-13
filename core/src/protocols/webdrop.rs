@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -36,6 +37,8 @@ pub struct WebDropServer {
     config: SharedConfig,
     received_tx: tokio::sync::broadcast::Sender<PathBuf>,
     running: Arc<Mutex<bool>>,
+    /// Set after the TCP listener binds successfully.
+    listening: Arc<AtomicBool>,
 }
 
 impl WebDropServer {
@@ -49,15 +52,31 @@ impl WebDropServer {
             config,
             received_tx,
             running: Arc::new(Mutex::new(false)),
+            listening: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn is_listening(&self) -> bool {
+        self.listening.load(Ordering::SeqCst)
+    }
+
+    /// URL encoded in the QR code — uses the best LAN IPv4 for this machine.
+    pub fn qr_url(&self) -> Result<String> {
+        let ip = crate::network::util::best_lan_ipv4()?;
+        Ok(format!("http://{}:{}/", ip, self.port))
     }
 
     pub async fn start(&self) -> Result<()> {
         let listener = bind_dual_stack(self.port).await?;
+        self.listening.store(true, Ordering::SeqCst);
         info!("Web Drop server listening on port {}", self.port);
         crate::activity::log(
             crate::activity::Category::Server,
-            format!("Web Drop ready on port {} (scan the QR to send)", self.port),
+            format!(
+                "Web Drop ready on port {} — phone URL: {}",
+                self.port,
+                self.qr_url().unwrap_or_else(|_| format!("http://<lan-ip>:{}/", self.port))
+            ),
         );
 
         *self.running.lock().await = true;
@@ -92,6 +111,7 @@ impl WebDropServer {
 
     pub async fn stop(&self) {
         *self.running.lock().await = false;
+        self.listening.store(false, Ordering::SeqCst);
     }
 }
 
@@ -191,14 +211,40 @@ async fn handle_connection(
                     .map(|c| c.broadcast_name.clone())
                     .unwrap_or_else(|_| "this PC".to_string());
                 let body = upload_page(&name);
-                write_response(reader.get_mut(), 200, "text/html; charset=utf-8", body.as_bytes())
-                    .await?;
+                write_response(
+                    reader.get_mut(),
+                    200,
+                    "text/html; charset=utf-8",
+                    body.as_bytes(),
+                    true,
+                )
+                .await?;
+                break;
+            }
+            ("HEAD", "/") | ("HEAD", "/index.html") => {
+                let name = config
+                    .read()
+                    .map(|c| c.broadcast_name.clone())
+                    .unwrap_or_else(|_| "this PC".to_string());
+                let body = upload_page(&name);
+                write_response_inner(
+                    reader.get_mut(),
+                    200,
+                    "text/html; charset=utf-8",
+                    body.as_bytes(),
+                    true,
+                    false,
+                )
+                .await?;
+                break;
             }
             ("GET", "/ping") => {
-                write_response(reader.get_mut(), 200, "text/plain", b"ok").await?;
+                write_response(reader.get_mut(), 200, "text/plain", b"ok", true).await?;
+                break;
             }
             ("GET", "/favicon.ico") => {
-                write_response(reader.get_mut(), 204, "image/x-icon", b"").await?;
+                write_response(reader.get_mut(), 204, "image/x-icon", b"", true).await?;
+                break;
             }
             ("POST", "/upload") => {
                 let saved =
@@ -212,6 +258,7 @@ async fn handle_connection(
                             200,
                             "application/json",
                             msg.as_bytes(),
+                            true,
                         )
                         .await?;
                     }
@@ -226,6 +273,7 @@ async fn handle_connection(
                             400,
                             "application/json",
                             b"{\"ok\":false}",
+                            true,
                         )
                         .await?;
                     }
@@ -234,18 +282,9 @@ async fn handle_connection(
                 break;
             }
             _ => {
-                write_response(reader.get_mut(), 404, "text/plain", b"Not found").await?;
+                write_response(reader.get_mut(), 404, "text/plain", b"Not found", true).await?;
+                break;
             }
-        }
-
-        // Honor Connection: close.
-        if head
-            .headers
-            .get("connection")
-            .map(|v| v.eq_ignore_ascii_case("close"))
-            .unwrap_or(false)
-        {
-            break;
         }
     }
     Ok(())
@@ -256,6 +295,18 @@ async fn write_response<W: AsyncWriteExt + Unpin>(
     status: u16,
     content_type: &str,
     body: &[u8],
+    close: bool,
+) -> Result<()> {
+    write_response_inner(w, status, content_type, body, close, true).await
+}
+
+async fn write_response_inner<W: AsyncWriteExt + Unpin>(
+    w: &mut W,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+    close: bool,
+    send_body: bool,
 ) -> Result<()> {
     let reason = match status {
         200 => "OK",
@@ -264,16 +315,17 @@ async fn write_response<W: AsyncWriteExt + Unpin>(
         404 => "Not Found",
         _ => "OK",
     };
+    let connection = if close { "close" } else { "keep-alive" };
     let head = format!(
         "HTTP/1.1 {status} {reason}\r\n\
          Content-Type: {content_type}\r\n\
          Content-Length: {len}\r\n\
          Cache-Control: no-store\r\n\
-         Connection: keep-alive\r\n\r\n",
+         Connection: {connection}\r\n\r\n",
         len = body.len()
     );
     w.write_all(head.as_bytes()).await?;
-    if !body.is_empty() {
+    if send_body && !body.is_empty() {
         w.write_all(body).await?;
     }
     w.flush().await?;

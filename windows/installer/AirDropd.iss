@@ -3,7 +3,7 @@
 #define MyAppName "AirDropd"
 #define MyAppVersion "0.1.0"
 #define MyAppPublisher "Rhythmic Records"
-#define MyAppURL "https://github.com/gigguru/AirDropd"
+#define MyAppURL "https://www.rhythmicrecords.net"
 #define MyAppExeName "AirDropd.exe"
 
 [Setup]

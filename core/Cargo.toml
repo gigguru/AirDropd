@@ -61,6 +61,7 @@ flate2 = "1.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tray-icon = { version = "0.19", default-features = false }
+wgpu = { version = "0.19", features = ["metal", "wgsl"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.48", features = [

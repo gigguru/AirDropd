@@ -402,9 +402,116 @@ pub fn device_list_row<'a>(
     .into()
 }
 
+/// Compact device chip with a large type icon — used below the radar.
+pub fn device_type_chip<'a>(
+    device: &crate::network::DiscoveredDevice,
+    is_selected: bool,
+    is_dark: bool,
+    message: Message,
+) -> Element<'a, Message> {
+    use crate::ui::device_icons;
+
+    let kind = device.kind();
+    let accent = device_icons::accent_color(kind, is_dark);
+    let icon = device_icons::icon(device);
+    let label = kind.label();
+    let distance = crate::ui::distance::device_distance_label(device.rssi);
+
+    let mut name = device.name.clone();
+    if name.chars().count() > 18 {
+        name = format!("{}…", name.chars().take(17).collect::<String>());
+    }
+
+    let bg = if is_selected {
+        color_with_alpha(accent, if is_dark { 0.35 } else { 0.22 })
+    } else if is_dark {
+        Color::from_rgba(0.18, 0.18, 0.20, 0.95)
+    } else {
+        Color::from_rgb(0.94, 0.94, 0.96)
+    };
+    let border = if is_selected {
+        accent
+    } else if is_dark {
+        Color::from_rgba(1.0, 1.0, 1.0, 0.08)
+    } else {
+        Color::from_rgba(0.0, 0.0, 0.0, 0.08)
+    };
+    let text_color = if is_dark {
+        styles::colors::TEXT_PRIMARY
+    } else {
+        styles::colors::TEXT_PRIMARY_LIGHT
+    };
+    let muted = if is_dark {
+        styles::colors::TEXT_MUTED
+    } else {
+        styles::colors::TEXT_MUTED_LIGHT
+    };
+
+    let content = container(
+        column![
+            container(text(icon).size(26))
+                .width(Length::Fixed(48.0))
+                .height(Length::Fixed(48.0))
+                .center_x()
+                .center_y()
+                .style(move |_: &IcedTheme| container::Appearance {
+                    background: Some(Background::Color(color_with_alpha(
+                        accent,
+                        if is_dark { 0.28 } else { 0.18 },
+                    ))),
+                    border: Border {
+                        radius: 24.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+            text(label)
+                .size(10)
+                .style(muted)
+                .horizontal_alignment(iced::alignment::Horizontal::Center),
+            text(distance.as_deref().unwrap_or(""))
+                .size(10)
+                .style(muted)
+                .horizontal_alignment(iced::alignment::Horizontal::Center),
+            text(name)
+                .size(11)
+                .style(text_color)
+                .horizontal_alignment(iced::alignment::Horizontal::Center),
+        ]
+        .spacing(4)
+        .align_items(Alignment::Center)
+        .width(Length::Fixed(92.0)),
+    )
+    .padding([8, 6])
+    .style(move |_: &IcedTheme| container::Appearance {
+        background: Some(Background::Color(bg)),
+        border: Border {
+            radius: 12.0.into(),
+            width: if is_selected { 1.5 } else { 1.0 },
+            color: border,
+        },
+        ..Default::default()
+    });
+
+    mouse_area(
+        button(content)
+            .on_press(message)
+            .style(iced::theme::Button::Text)
+            .padding(0),
+    )
+    .into()
+}
+
+fn color_with_alpha(color: Color, alpha: f32) -> Color {
+    Color {
+        a: alpha,
+        ..color
+    }
+}
+
 /// Returns the device-type icon (iPhone, MacBook, …) for a discovered device.
 pub fn device_icon(device: &crate::network::DiscoveredDevice) -> &'static str {
-    device.kind().emoji()
+    crate::ui::device_icons::icon(device)
 }
 
 /// Collapsible panel widget.

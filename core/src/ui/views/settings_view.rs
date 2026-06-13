@@ -9,26 +9,11 @@ use iced::{
 };
 
 use crate::ui::{messages::Message, styles, Theme};
-use crate::config::AppConfig;
+use crate::config::{AppConfig, DiscoveryMode};
 use std::path::PathBuf;
 
 /// Discovery visibility options (shared with the main view picker).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AirDropVisibility {
-    Everyone,
-    ContactsOnly,
-    ReceivingOff,
-}
-
-impl std::fmt::Display for AirDropVisibility {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AirDropVisibility::Everyone => write!(f, "Everyone"),
-            AirDropVisibility::ContactsOnly => write!(f, "Contacts Only"),
-            AirDropVisibility::ReceivingOff => write!(f, "No One"),
-        }
-    }
-}
+pub type AirDropVisibility = DiscoveryMode;
 
 /// Persistent state for the settings form.
 #[derive(Debug, Clone)]
@@ -135,10 +120,10 @@ impl SettingsView {
             ]
             .align_items(Alignment::Center)
             .spacing(styles::spacing::MEDIUM),
-            text("This is the name iPhones and Macs see in their AirDrop sheet.")
+            text("This name appears when others share files to you.")
                 .size(12),
             row![
-                text("Download folder:")
+                text("Save folder:")
                     .size(14)
                     .width(Length::FillPortion(1)),
                 text_input("Downloads", &self.download_dir_text)
@@ -151,8 +136,11 @@ impl SettingsView {
             ]
             .align_items(Alignment::Center)
             .spacing(styles::spacing::MEDIUM),
-            text("Received files are saved in an AirDropd subfolder inside this location.")
-                .size(12),
+            text(format!(
+                "Transfers go to {} (QR uploads use the WebDrop subfolder).",
+                AppConfig::default_save_paths_hint()
+            ))
+            .size(12),
             checkbox("Minimize to system tray", self.minimize_to_tray)
                 .on_toggle(Message::MinimizeToTrayChanged),
         ]
@@ -176,9 +164,8 @@ impl SettingsView {
             checkbox("Show all nearby devices", self.show_all_devices)
                 .on_toggle(Message::ShowAllDevicesChanged),
             text(
-                "Also shows AirPods, AirTags, Apple Watch and Find My beacons on the \
-                 radar with live signal strength — walk around and watch the dBm rise \
-                 to locate a lost device after a show.",
+                "Also shows headphones, trackers, watches, and other nearby beacons on the \
+                 radar — walk around and watch the distance update to locate a lost device.",
             )
             .size(12),
         ]
@@ -189,7 +176,10 @@ impl SettingsView {
 
     fn maintenance_settings(&self, _theme: &Theme) -> Element<Message> {
         let settings = column![row![
-            button(text("🗂 Open Data Folder").size(14))
+            button(text("Open Save Folder").size(14))
+                .on_press(Message::OpenReceiveFolder)
+                .style(iced::theme::Button::Secondary),
+            button(text("Open Data Folder").size(14))
                 .on_press(Message::OpenLogFolder)
                 .style(iced::theme::Button::Secondary),
             button(text("🧹 Clear Cache").size(14))

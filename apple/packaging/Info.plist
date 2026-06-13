@@ -28,8 +28,6 @@
     <true/>
     <key>LSUIElement</key>
     <false/>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>AirDropd uses Bluetooth to discover nearby iPhones, iPads, and other Apple devices and estimate their distance on the radar.</string>
     <key>NSBluetoothPeripheralUsageDescription</key>

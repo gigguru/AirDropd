@@ -18,11 +18,13 @@ jobs:
       matrix:
         include:
           - runner: macos-14
-            target: aarch64-apple-darwin
+            macos_target: aarch64-apple-darwin
             artifact: AirDropd-macos-aarch64
+            zip: AirDropd-macos-arm64.zip
           - runner: macos-13
-            target: x86_64-apple-darwin
+            macos_target: x86_64-apple-darwin
             artifact: AirDropd-macos-x86_64
+            zip: AirDropd-macos-x86_64.zip
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
@@ -31,51 +33,60 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.macos_target }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
 
-      - name: Build AirDropd.app
+      - name: Build AirDropd.app + zip
+        env:
+          MACOS_TARGET: ${{ matrix.macos_target }}
         run: |
-          chmod +x apple/build-macos.sh
-          cargo build --release --manifest-path apple/Cargo.toml --target ${{ matrix.target }}
-          # Re-run bundle step with cross-target binary path
-          ROOT="$PWD"
-          BIN="$ROOT/target/${{ matrix.target }}/release/AirDropd"
-          APP="$ROOT/apple/dist/AirDropd.app"
-          MACOS="$APP/Contents/MacOS"
-          RES="$APP/Contents/Resources"
-          rm -rf "$APP"
-          mkdir -p "$MACOS" "$RES"
-          cp "$BIN" "$MACOS/AirDropd"
-          chmod +x "$MACOS/AirDropd"
-          cp apple/packaging/Info.plist "$APP/Contents/Info.plist"
-          PNG="$ROOT/assets/airdropd-icon.png"
-          ICONSET="$(mktemp -d)/AppIcon.iconset"
-          mkdir -p "$ICONSET"
-          sips -z 16 16 "$PNG" --out "$ICONSET/icon_16x16.png" >/dev/null
-          sips -z 32 32 "$PNG" --out "$ICONSET/icon_16x16@2x.png" >/dev/null
-          sips -z 32 32 "$PNG" --out "$ICONSET/icon_32x32.png" >/dev/null
-          sips -z 64 64 "$PNG" --out "$ICONSET/icon_32x32@2x.png" >/dev/null
-          sips -z 128 128 "$PNG" --out "$ICONSET/icon_128x128.png" >/dev/null
-          sips -z 256 256 "$PNG" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
-          sips -z 256 256 "$PNG" --out "$ICONSET/icon_256x256.png" >/dev/null
-          sips -z 512 512 "$PNG" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
-          sips -z 512 512 "$PNG" --out "$ICONSET/icon_512x512.png" >/dev/null
-          sips -z 1024 1024 "$PNG" --out "$ICONSET/icon_512x512@2x.png" >/dev/null
-          iconutil -c icns "$ICONSET" -o "$RES/AppIcon.icns"
-          ls -la "$APP/Contents/MacOS/AirDropd"
-          mkdir -p dist
-          rm -f "dist/AirDropd-macos-${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x86_64' }}.zip"
-          ditto -c -k --sequesterRsrc --keepParent "$APP" "dist/AirDropd-macos-${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x86_64' }}.zip"
+          chmod +x apple/build-macos.sh apple/packaging/make-dmg.sh
+          ./apple/build-macos.sh
+          ls -la dist/
 
       - name: Upload AirDropd.app zip
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: dist/AirDropd-macos-${{ matrix.target == 'aarch64-apple-darwin' && 'arm64' || 'x86_64' }}.zip
+          path: dist/${{ matrix.zip }}
+          if-no-files-found: error
+          retention-days: 30
+
+  dmg:
+    name: AirDropd Setup.dmg (universal)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Build universal app + professional DMG
+        env:
+          MACOS_TARGET: universal
+        run: |
+          chmod +x apple/build-macos.sh apple/packaging/make-dmg.sh
+          ./apple/build-macos.sh
+          ls -la dist/
+
+      - name: Upload DMG + universal zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: AirDropd-macos-universal
+          path: |
+            dist/AirDropd Setup.dmg
+            dist/AirDropd-macos-universal.zip
           if-no-files-found: error
           retention-days: 30

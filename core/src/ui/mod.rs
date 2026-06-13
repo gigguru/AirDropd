@@ -18,6 +18,9 @@ use std::time::Duration;
 // UI modules.
 pub mod components;
 pub mod assets;
+pub mod device_icons;
+pub mod distance;
+pub mod icons;
 pub mod messages;
 pub mod qr;
 pub mod radar;
@@ -50,6 +53,26 @@ fn short_ble_suffix(id: &str) -> String {
         hash = hash.rotate_left(5) ^ (b as u16);
     }
     format!("{:04X}", hash)
+}
+
+fn anonymous_mobile_ble_name(
+    profile: &crate::network::discovery::BleMobileProfile,
+    id: &str,
+) -> String {
+    let suffix = short_ble_suffix(id);
+    use crate::network::discovery::BleMobilePlatform;
+    match profile.platform {
+        Some(BleMobilePlatform::Apple) => match profile.device_class {
+            "tablet" => format!("iPad nearby {suffix}"),
+            _ => format!("iPhone nearby {suffix}"),
+        },
+        Some(BleMobilePlatform::Android) => match profile.device_class {
+            "tablet" => format!("Android tablet {suffix}"),
+            "watch" => format!("Android watch {suffix}"),
+            _ => format!("Android phone {suffix}"),
+        },
+        None => format!("Mobile phone {suffix}"),
+    }
 }
  
 /// Application theme, used by `styles` for custom styling.
@@ -95,11 +118,11 @@ pub struct AirDropdApp {
     /// Persisted settings view to avoid lifetime issues
     settings_view: views::settings_view::SettingsView,
     
-    /// Persisted about view to avoid lifetime issues
-    about_view: views::about_view::AboutView,
-    
     /// Link-send dialog state
     show_link_dialog: bool,
+
+    /// About dialog overlay
+    show_about: bool,
     
     /// URL to send as a link
     link_url: String,
@@ -141,6 +164,7 @@ pub struct AirDropdApp {
     /// Cached Web Drop URL + QR image (recomputed when opening the screen)
     web_drop_url: Option<String>,
     web_drop_qr: Option<iced::widget::image::Handle>,
+    web_drop_listening: bool,
     /// Large QR for DJ mode (separate cache so toggling views stays fast)
     dj_qr: Option<iced::widget::image::Handle>,
 
@@ -149,6 +173,21 @@ pub struct AirDropdApp {
     dj_last_file: Option<String>,
     /// Restore AirDrop auto-accept when leaving DJ mode
     dj_saved_auto_accept: Option<bool>,
+    /// Guest upload folders shown as file-cabinet drawers
+    dj_drawers: Vec<views::dj_mode_view::DjDrawer>,
+    dj_drawer_order: Vec<String>,
+    dj_renaming_folder: Option<String>,
+    dj_rename_text: String,
+
+    /// Sonar vs list layout on the main screen
+    device_view_mode: views::device_list_view::DeviceViewMode,
+
+    /// Active list sort column and direction
+    list_sort_column: views::device_list_view::ListSortColumn,
+    list_sort_ascending: bool,
+
+    /// When true, discovery refreshes and sonar sweep are paused (event mode).
+    discovery_frozen: bool,
 }
 
 /// Available application views.
@@ -164,8 +203,6 @@ pub enum AppView {
     DjMode,
     /// Settings view
     Settings,
-    /// About view
-    About,
     /// Initial loading view
     Loading,
     /// Startup splash with branded icon animation
@@ -199,13 +236,9 @@ impl Application for AirDropdApp {
             status_message: "Starting...".to_string(),
             is_loading: true,
             theme: Theme::default(),
-            discovery_visibility: views::settings_view::AirDropVisibility::Everyone,
+            discovery_visibility: cfg.discovery_mode,
             settings_view,
-            about_view: views::about_view::AboutView::new(
-                "0.1.0".to_string(),
-                "unknown".to_string(),
-                None,
-            ),
+            show_about: false,
             discovered_devices: Vec::new(),
             selected_device: None,
             is_scanning: false,
@@ -227,10 +260,19 @@ impl Application for AirDropdApp {
             pending_recipient_files: None,
             web_drop_url: None,
             web_drop_qr: None,
+            web_drop_listening: false,
             dj_qr: None,
             dj_files_received: 0,
             dj_last_file: None,
             dj_saved_auto_accept: None,
+            dj_drawers: Vec::new(),
+            dj_drawer_order: Vec::new(),
+            dj_renaming_folder: None,
+            dj_rename_text: String::new(),
+            device_view_mode: views::device_list_view::DeviceViewMode::Sonar,
+            list_sort_column: views::device_list_view::ListSortColumn::Distance,
+            list_sort_ascending: true,
+            discovery_frozen: false,
         };
 
         (app, Command::none())
@@ -243,7 +285,6 @@ impl Application for AirDropdApp {
             AppView::WebDrop => "AirDropd — Receive via QR".to_string(),
             AppView::DjMode => "AirDropd — DJ Mode".to_string(),
             AppView::Settings => "AirDropd — Settings".to_string(),
-            AppView::About => "AirDropd — About".to_string(),
             AppView::Loading | AppView::Splash => "AirDropd".to_string(),
         }
     }
@@ -280,7 +321,7 @@ impl Application for AirDropdApp {
             }
 
             Message::SonarTick => {
-                if self.is_scanning {
+                if !self.discovery_frozen {
                     self.sonar_tick = self.sonar_tick.wrapping_add(1);
                 }
                 Command::none()
@@ -389,7 +430,11 @@ impl Application for AirDropdApp {
             }
 
             Message::DevicesRefreshed(devices) => {
+                if self.discovery_frozen {
+                    return Command::none();
+                }
                 self.discovered_devices = devices;
+                self.sync_selected_device();
                 if !self.is_scanning {
                     self.status_message = format!(
                         "Found {} devices",
@@ -406,7 +451,12 @@ impl Application for AirDropdApp {
             }
 
             Message::DevicesUpdated(devices) => {
+                if self.discovery_frozen {
+                    self.is_scanning = false;
+                    return Command::none();
+                }
                 self.discovered_devices = devices;
+                self.sync_selected_device();
                 self.is_scanning = false;
                 self.status_message = format!(
                     "Found {} devices",
@@ -417,14 +467,34 @@ impl Application for AirDropdApp {
 
             Message::DeviceSelected(device) => {
                 self.selected_device = Some(device.clone());
-                self.status_message = format!("Selected: {}", device.name);
-                
-                self.add_notification(
-                    "Device selected".to_string(),
-                    format!("You can now send content to {}", device.name),
-                    messages::NotificationType::Info,
-                );
-                
+                self.status_message = format!("Selected: {}", device.display_title());
+                Command::none()
+            }
+
+            Message::DeviceDeselected => {
+                if self.file_transfer_progress.is_none() {
+                    self.selected_device = None;
+                }
+                Command::none()
+            }
+
+            Message::SetDeviceViewMode(mode) => {
+                self.device_view_mode = mode;
+                Command::none()
+            }
+
+            Message::ListSortBy(column) => {
+                if self.list_sort_column == column {
+                    self.list_sort_ascending = !self.list_sort_ascending;
+                } else {
+                    self.list_sort_column = column;
+                    self.list_sort_ascending = true;
+                }
+                Command::none()
+            }
+
+            Message::ToggleDiscoveryFreeze => {
+                self.discovery_frozen = !self.discovery_frozen;
                 Command::none()
             }
 
@@ -536,11 +606,14 @@ impl Application for AirDropdApp {
                 self.file_transfer_progress = None;
                 self.airdrop_status = crate::protocols::airdrop::AirDropStatus::Idle;
                 match result {
-                    Ok(()) => self.add_notification(
-                        "Transfer complete".to_string(),
-                        "Operation completed successfully".to_string(),
-                        messages::NotificationType::Success,
-                    ),
+                    Ok(()) => {
+                        self.selected_device = None;
+                        self.add_notification(
+                            "Transfer complete".to_string(),
+                            "Operation completed successfully".to_string(),
+                            messages::NotificationType::Success,
+                        );
+                    }
                     Err(e) => self.add_notification(
                         "Transfer failed".to_string(),
                         e,
@@ -654,20 +727,26 @@ impl Application for AirDropdApp {
             
             Message::VisibilityChanged(visibility) => {
                 self.discovery_visibility = visibility;
+                let show_all = self
+                    .services
+                    .config
+                    .read()
+                    .map(|c| c.show_all_devices)
+                    .unwrap_or(false);
+                if let Some(selected) = &self.selected_device {
+                    if !selected.matches_filter(visibility.device_filter(), show_all) {
+                        self.selected_device = None;
+                    }
+                }
                 let services = self.services.clone();
                 Command::perform(
                     async move {
-                        let discoverable =
-                            visibility != views::settings_view::AirDropVisibility::ReceivingOff;
-                        let contacts_only =
-                            visibility == views::settings_view::AirDropVisibility::ContactsOnly;
                         {
                             let mut cfg = services
                                 .config
                                 .write()
                                 .map_err(|_| "config lock poisoned".to_string())?;
-                            cfg.discoverable = discoverable;
-                            cfg.contacts_only = contacts_only;
+                            cfg.set_discovery_mode(visibility);
                             cfg.save().map_err(|e| e.to_string())?;
                         }
                         services.apply_settings().await.map_err(|e| e.to_string())
@@ -695,6 +774,109 @@ impl Application for AirDropdApp {
                 Command::none()
             }
 
+            Message::RefreshWebDropUrl => {
+                let large = matches!(self.current_view, AppView::DjMode);
+                self.refresh_web_drop(large);
+                Command::none()
+            }
+
+            Message::DjScanDrawers => {
+                self.scan_dj_drawers();
+                Command::none()
+            }
+
+            Message::DjDrawerOpen(folder) => {
+                let path = self
+                    .dj_drawers
+                    .iter()
+                    .find(|d| d.folder_name == folder)
+                    .map(|d| d.path.clone());
+                if let Some(path) = path {
+                    return Command::perform(
+                        async move {
+                            open_folder(&path).map_err(|e| e.to_string())
+                        },
+                        |res| match res {
+                            Ok(()) => Message::Tick,
+                            Err(e) => Message::Error(e),
+                        },
+                    );
+                }
+                Command::none()
+            }
+
+            Message::DjDrawerRenameStart(folder) => {
+                self.dj_renaming_folder = Some(folder.clone());
+                self.dj_rename_text = folder;
+                Command::none()
+            }
+
+            Message::DjDrawerRenameInput(text) => {
+                self.dj_rename_text = text;
+                Command::none()
+            }
+
+            Message::DjDrawerRenameSubmit => {
+                let old = match self.dj_renaming_folder.take() {
+                    Some(f) => f,
+                    None => return Command::none(),
+                };
+                let new_label = self.dj_rename_text.trim().to_string();
+                self.dj_rename_text.clear();
+                if new_label.is_empty() || new_label == old {
+                    return Command::none();
+                }
+                let res = self
+                    .services
+                    .config
+                    .write()
+                    .map_err(|_| "config lock poisoned".to_string())
+                    .and_then(|mut cfg| {
+                        cfg.rename_webdrop_folder(&old, &new_label)
+                            .map_err(|e| e.to_string())
+                    });
+                match res {
+                    Ok(_) => {
+                        if let Some(i) = self.dj_drawer_order.iter().position(|n| n == &old) {
+                            self.dj_drawer_order[i] =
+                                crate::config::sanitize_folder_name(&new_label);
+                        }
+                        self.scan_dj_drawers();
+                        Command::none()
+                    }
+                    Err(e) => {
+                        self.dj_renaming_folder = Some(old);
+                        Command::perform(async {}, move |_| Message::Error(e))
+                    }
+                }
+            }
+
+            Message::DjDrawerRenameCancel => {
+                self.dj_renaming_folder = None;
+                self.dj_rename_text.clear();
+                Command::none()
+            }
+
+            Message::DjDrawerMoveUp(folder) => {
+                if let Some(i) = self.dj_drawer_order.iter().position(|n| n == &folder) {
+                    if i > 0 {
+                        self.dj_drawer_order.swap(i, i - 1);
+                        self.apply_dj_drawer_order();
+                    }
+                }
+                Command::none()
+            }
+
+            Message::DjDrawerMoveDown(folder) => {
+                if let Some(i) = self.dj_drawer_order.iter().position(|n| n == &folder) {
+                    if i + 1 < self.dj_drawer_order.len() {
+                        self.dj_drawer_order.swap(i, i + 1);
+                        self.apply_dj_drawer_order();
+                    }
+                }
+                Command::none()
+            }
+
             Message::ShowDjMode => {
                 let prev = self
                     .services
@@ -706,11 +888,14 @@ impl Application for AirDropdApp {
                 self.services.incoming_transfer.set_auto_accept(true);
                 self.dj_files_received = 0;
                 self.dj_last_file = None;
+                self.dj_renaming_folder = None;
+                self.dj_rename_text.clear();
+                self.scan_dj_drawers();
                 self.refresh_web_drop(true);
                 self.current_view = AppView::DjMode;
                 crate::activity::log(
                     crate::activity::Category::Transfer,
-                    "DJ Mode started — QR full-screen, auto-save enabled",
+                    "DJ Mode started — QR + set cabinet, auto-save enabled",
                 );
                 Command::batch([
                     window::maximize(window::Id::MAIN, true),
@@ -722,6 +907,8 @@ impl Application for AirDropdApp {
                 if let Some(prev) = self.dj_saved_auto_accept.take() {
                     self.services.incoming_transfer.set_auto_accept(prev);
                 }
+                self.dj_renaming_folder = None;
+                self.dj_rename_text.clear();
                 self.current_view = AppView::Main;
                 crate::activity::log(
                     crate::activity::Category::Transfer,
@@ -787,7 +974,14 @@ impl Application for AirDropdApp {
 
             Message::ShowAllDevicesChanged(value) => {
                 self.settings_view.set_show_all_devices(value);
-                Command::none()
+                if let Ok(mut cfg) = self.services.config.write() {
+                    cfg.show_all_devices = value;
+                    let _ = cfg.save();
+                }
+                return Command::perform(
+                    Self::fetch_devices(self.services.clone()),
+                    Message::DevicesRefreshed,
+                );
             }
 
             Message::SaveSettings => {
@@ -1003,6 +1197,7 @@ impl Application for AirDropdApp {
                             _ => name.clone(),
                         };
                         self.dj_last_file = Some(display);
+                        self.scan_dj_drawers();
                     } else {
                         self.add_notification(
                             "File received".to_string(),
@@ -1015,9 +1210,24 @@ impl Application for AirDropdApp {
             }
 
             Message::ShowAbout => {
-                self.current_view = AppView::About;
+                self.show_about = true;
                 Command::none()
             }
+
+            Message::CloseAbout => {
+                self.show_about = false;
+                Command::none()
+            }
+
+            Message::OpenCashAppDonation => Command::perform(
+                async {
+                    open_url("https://cash.app/$therealstollie").map_err(|e| e.to_string())
+                },
+                |res| match res {
+                    Ok(()) => Message::Tick,
+                    Err(e) => Message::Error(e),
+                },
+            ),
 
             Message::OpenLogFolder => {
                 let path = crate::config::config_path();
@@ -1031,6 +1241,25 @@ impl Application for AirDropdApp {
                     },
                     |res| match res {
                         Ok(()) => Message::Info("Opened AirDropd data folder.".into()),
+                        Err(e) => Message::Error(e),
+                    },
+                )
+            }
+
+            Message::OpenReceiveFolder => {
+                let folder = self
+                    .services
+                    .config
+                    .read()
+                    .map(|c| c.receive_dir())
+                    .unwrap_or_else(|_| crate::config::AppConfig::default().receive_dir());
+                Command::perform(
+                    async move {
+                        std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+                        open_folder(&folder).map_err(|e| e.to_string())
+                    },
+                    |res| match res {
+                        Ok(()) => Message::Info("Opened save folder.".into()),
                         Err(e) => Message::Error(e),
                     },
                 )
@@ -1102,7 +1331,7 @@ impl Application for AirDropdApp {
 
             Message::OpenWebsite => Command::perform(
                 async {
-                    open_url("https://github.com/gigguru/AirDropd").map_err(|e| e.to_string())
+                    open_url("https://www.rhythmicrecords.net").map_err(|e| e.to_string())
                 },
                 |res| match res {
                     Ok(()) => Message::Tick,
@@ -1138,6 +1367,9 @@ impl Application for AirDropdApp {
     }
 
     fn view(&self) -> Element<Self::Message> {
+        if self.show_about {
+            return views::about_view::overlay(&self.theme);
+        }
         match self.current_view {
             AppView::Splash => views::splash_view::render(&self.splash_frames, self.splash_tick),
             AppView::Loading => self.loading_view(),
@@ -1146,21 +1378,24 @@ impl Application for AirDropdApp {
             AppView::WebDrop => self.web_drop_view(),
             AppView::DjMode => self.dj_mode_view(),
             AppView::Settings => self.settings_view(),
-            AppView::About => self.about_view(),
         }
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
         let refresh_secs = if self.is_scanning { 2 } else { 4 };
         // No discovery refreshes or radar redraws while minimized to tray.
-        let refresh = if matches!(self.current_view, AppView::Main) && !self.window_hidden {
+        let refresh = if matches!(self.current_view, AppView::Main)
+            && !self.window_hidden
+            && !self.discovery_frozen
+        {
             time::every(Duration::from_secs(refresh_secs)).map(|_| Message::RefreshDevices)
         } else {
             Subscription::none()
         };
 
         let sonar = if matches!(self.current_view, AppView::Main)
-            && self.is_scanning
+            && self.device_view_mode == views::device_list_view::DeviceViewMode::Sonar
+            && !self.discovery_frozen
             && !self.window_hidden
         {
             time::every(Duration::from_millis(120)).map(|_| Message::SonarTick)
@@ -1175,6 +1410,18 @@ impl Application for AirDropdApp {
 
         let incoming_poll =
             time::every(Duration::from_millis(250)).map(|_| Message::PollIncomingTransfer);
+
+        let webdrop_refresh = if matches!(self.current_view, AppView::WebDrop | AppView::DjMode) {
+            time::every(Duration::from_secs(3)).map(|_| Message::RefreshWebDropUrl)
+        } else {
+            Subscription::none()
+        };
+
+        let dj_drawers = if matches!(self.current_view, AppView::DjMode) && !self.window_hidden {
+            time::every(Duration::from_secs(2)).map(|_| Message::DjScanDrawers)
+        } else {
+            Subscription::none()
+        };
 
         let window_events = event::listen_with(|event, _status| match event {
             Event::Window(_id, window::Event::CloseRequested) => {
@@ -1205,6 +1452,8 @@ impl Application for AirDropdApp {
             tray_poll,
             received_poll,
             incoming_poll,
+            webdrop_refresh,
+            dj_drawers,
             window_events,
             splash,
         ])
@@ -1229,6 +1478,9 @@ impl AirDropdApp {
         views::main_view::render(
             &self.discovered_devices,
             self.selected_device.as_ref(),
+            self.device_view_mode,
+            self.list_sort_column,
+            self.list_sort_ascending,
             self.is_scanning,
             self.sonar_tick,
             &self.airdrop_status,
@@ -1240,6 +1492,7 @@ impl AirDropdApp {
             self.pending_recipient_files.as_deref(),
             self.drop_hover,
             self.discovery_visibility,
+            self.discovery_frozen,
             &self.theme,
         )
     }
@@ -1249,16 +1502,11 @@ impl AirDropdApp {
         self.settings_view.view(&self.theme)
     }
 
-    /// About view.
-    fn about_view(&self) -> Element<Message> {
-        self.about_view.view(&self.theme)
-    }
-
     /// Recompute the Web Drop URL + QR for the current network address.
     fn refresh_web_drop(&mut self, large: bool) {
-        match crate::network::util::primary_ipv4() {
-            Ok(ip) => {
-                let url = format!("http://{}:{}/", ip, crate::protocols::webdrop::WEB_DROP_PORT);
+        self.web_drop_listening = self.services.web_drop.is_listening();
+        match self.services.web_drop.qr_url() {
+            Ok(url) => {
                 let (module_px, quiet) = if large { (14, 4) } else { (8, 4) };
                 let png = qr::png_bytes(&url, module_px, quiet).ok();
                 if large {
@@ -1281,6 +1529,7 @@ impl AirDropdApp {
         let status = views::webdrop_view::WebDropStatus {
             url: self.web_drop_url.clone(),
             qr: self.web_drop_qr.clone(),
+            server_listening: self.web_drop_listening,
         };
         views::webdrop_view::render(&status, &self.theme)
     }
@@ -1297,8 +1546,12 @@ impl AirDropdApp {
             device_name,
             url: self.web_drop_url.clone(),
             qr: self.dj_qr.clone(),
+            server_listening: self.web_drop_listening,
             files_received: self.dj_files_received,
             last_file: self.dj_last_file.clone(),
+            drawers: &self.dj_drawers,
+            renaming_folder: self.dj_renaming_folder.as_deref(),
+            rename_text: &self.dj_rename_text,
         };
         views::dj_mode_view::render(&status, &self.theme)
     }
@@ -1329,16 +1582,22 @@ impl AirDropdApp {
     async fn fetch_devices(
         services: Arc<crate::AirDropdServices>,
     ) -> Vec<crate::network::DiscoveredDevice> {
-        let (our_name, our_ip, show_all) = {
+        let (our_name, our_ip, show_all, discovery_mode) = {
             let cfg = services.config.read().ok();
             let name = cfg
                 .as_ref()
                 .map(|c| c.broadcast_name.to_lowercase())
                 .unwrap_or_default();
             let show_all = cfg.as_ref().map(|c| c.show_all_devices).unwrap_or(false);
+            let discovery_mode = cfg
+                .as_ref()
+                .map(|c| c.discovery_mode)
+                .unwrap_or(crate::config::DiscoveryMode::Everyone);
             let ip = crate::network::util::primary_ipv4().ok();
-            (name, ip, show_all)
+            (name, ip, show_all, discovery_mode)
         };
+        let include_accessories = discovery_mode.include_accessories(show_all);
+        let device_filter = discovery_mode.device_filter();
 
         let mut by_key: HashMap<String, crate::network::DiscoveredDevice> = HashMap::new();
         let mut by_name: HashMap<String, String> = HashMap::new();
@@ -1436,7 +1695,7 @@ impl AirDropdApp {
 
             // Accessories (AirPods, AirTags, Find My beacons) only show when
             // "Show all nearby devices" is enabled — the lost-device finder.
-            if ble.accessory_label.is_some() && !show_all {
+            if ble.accessory_label.is_some() && !include_accessories {
                 continue;
             }
 
@@ -1448,6 +1707,8 @@ impl AirDropdApp {
                 ble.name.clone()
             } else if let Some(label) = ble.accessory_label {
                 format!("{} {}", label, short_ble_suffix(&ble.id))
+            } else if ble.mobile_profile.is_mobile {
+                anonymous_mobile_ble_name(&ble.mobile_profile, &ble.id)
             } else if ble.apple {
                 format!("Apple device {}", short_ble_suffix(&ble.id))
             } else {
@@ -1455,6 +1716,7 @@ impl AirDropdApp {
             };
 
             let mut txt_records = HashMap::new();
+            txt_records.insert("ble_id".to_string(), ble.id.clone());
             if ble.name.is_empty() {
                 txt_records.insert("anonymous".to_string(), "1".to_string());
             }
@@ -1463,6 +1725,35 @@ impl AirDropdApp {
             }
             if ble.accessory_label.is_some() {
                 txt_records.insert("accessory".to_string(), "1".to_string());
+            }
+            if let Some(label) = ble.accessory_label {
+                txt_records.insert("accessory_label".to_string(), label.to_string());
+            }
+            if ble.mobile_profile.is_mobile {
+                txt_records.insert("mobile_presence".to_string(), "1".to_string());
+                txt_records.insert(
+                    "device_class".to_string(),
+                    ble.mobile_profile.device_class.to_string(),
+                );
+                match ble.mobile_profile.platform {
+                    Some(crate::network::discovery::BleMobilePlatform::Android) => {
+                        txt_records.insert("platform".to_string(), "android".to_string());
+                    }
+                    Some(crate::network::discovery::BleMobilePlatform::Apple) => {
+                        txt_records.insert("apple_presence".to_string(), "1".to_string());
+                    }
+                    None => {}
+                }
+            } else if !ble.apple {
+                txt_records.insert("platform".to_string(), "android".to_string());
+                if let Some(class) = crate::network::discovery::android_class_from_ble(
+                    &name,
+                    ble.manufacturer_data.keys().copied(),
+                ) {
+                    txt_records.insert("device_class".to_string(), class.to_string());
+                }
+            } else if ble.apple && ble.name.is_empty() && ble.accessory_label.is_none() {
+                txt_records.insert("apple_presence".to_string(), "1".to_string());
             }
 
             let key = format!("ble:{}", ble.id);
@@ -1478,10 +1769,19 @@ impl AirDropdApp {
 
         let mut devices: Vec<_> = by_key.into_values().collect();
 
-        // One row per device name — mDNS often reports AirPlay, RAOP, companion, etc. separately.
+        // One row per device — mDNS often reports AirPlay, RAOP, companion, etc. separately.
         let mut best_by_name: HashMap<String, crate::network::DiscoveredDevice> = HashMap::new();
+        let dedup_key = |device: &crate::network::DiscoveredDevice| {
+            let base = device.name.to_lowercase();
+            if device.txt_records.get("anonymous") == Some(&"1".to_string()) {
+                if let Some(id) = device.txt_records.get("ble_id") {
+                    return format!("{base}|{id}");
+                }
+            }
+            base
+        };
         for device in devices {
-            let key = device.name.to_lowercase();
+            let key = dedup_key(&device);
             let rank = |d: &crate::network::DiscoveredDevice| {
                 let service = match d.service_type {
                     crate::network::ServiceType::AirDrop => 0,
@@ -1501,7 +1801,10 @@ impl AirDropdApp {
             best_by_name
                 .entry(key)
                 .and_modify(|existing| {
-                    let rssi = device.rssi.or(existing.rssi);
+                    let rssi = match (device.rssi, existing.rssi) {
+                        (Some(a), Some(b)) => Some(a.max(b)),
+                        (a, b) => a.or(b),
+                    };
                     // Merge TXT records from every advertisement: the hardware
                     // model (used for the device-type icon) often comes from a
                     // different service than the one we keep for transfers.
@@ -1519,13 +1822,16 @@ impl AirDropdApp {
         }
         devices = best_by_name.into_values().collect();
 
-        // Media-only endpoints (Apple TV, speakers) can't receive AirDrop —
-        // keep the radar focused on devices that can actually exchange files.
+        // Drop speakers/TVs that only advertise AirPlay audio, but keep phones
+        // that surface through AirPlay / RAOP with no companion-link record.
         devices.retain(|d| {
-            !matches!(
+            if matches!(
                 d.service_type,
                 crate::network::ServiceType::AirPlay | crate::network::ServiceType::Raop
-            )
+            ) {
+                return d.is_mobile_device();
+            }
+            true
         });
 
         devices.sort_by(|a, b| {
@@ -1539,6 +1845,8 @@ impl AirDropdApp {
                 .cmp(&rank(b))
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
+
+        devices.retain(|d| d.matches_filter(device_filter, show_all));
         devices
     }
 
@@ -1625,6 +1933,88 @@ impl AirDropdApp {
             self.notifications.remove(0);
         }
     }
+
+    /// Keep the open device form synced with the latest discovery snapshot.
+    fn sync_selected_device(&mut self) {
+        let Some(selected) = self.selected_device.as_ref() else {
+            return;
+        };
+        let key = selected.match_key();
+        self.selected_device = self
+            .discovered_devices
+            .iter()
+            .find(|d| d.match_key() == key)
+            .cloned();
+    }
+
+    /// Rescan WebDrop guest folders for the DJ set cabinet.
+    fn scan_dj_drawers(&mut self) {
+        let root = match self.services.config.read() {
+            Ok(cfg) => cfg.webdrop_dir(),
+            Err(_) => return,
+        };
+        let mut found: Vec<views::dj_mode_view::DjDrawer> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let folder_name = entry.file_name().to_string_lossy().to_string();
+                let file_count = count_files_in_dir(&path);
+                found.push(views::dj_mode_view::DjDrawer {
+                    folder_name,
+                    path,
+                    file_count,
+                });
+            }
+        }
+        found.sort_by(|a, b| a.folder_name.to_lowercase().cmp(&b.folder_name.to_lowercase()));
+
+        if self.dj_drawer_order.is_empty() {
+            self.dj_drawer_order = found.iter().map(|d| d.folder_name.clone()).collect();
+        } else {
+            for drawer in &found {
+                if !self.dj_drawer_order.contains(&drawer.folder_name) {
+                    self.dj_drawer_order.push(drawer.folder_name.clone());
+                }
+            }
+            self.dj_drawer_order
+                .retain(|name| found.iter().any(|d| d.folder_name == *name));
+        }
+
+        let mut ordered = Vec::with_capacity(found.len());
+        for name in &self.dj_drawer_order {
+            if let Some(drawer) = found.iter().find(|d| d.folder_name == *name) {
+                ordered.push(drawer.clone());
+            }
+        }
+        self.dj_drawers = ordered;
+    }
+
+    fn apply_dj_drawer_order(&mut self) {
+        let map: std::collections::HashMap<_, _> = self
+            .dj_drawers
+            .drain(..)
+            .map(|d| (d.folder_name.clone(), d))
+            .collect();
+        self.dj_drawers = self
+            .dj_drawer_order
+            .iter()
+            .filter_map(|name| map.get(name).cloned())
+            .collect();
+    }
+}
+
+fn count_files_in_dir(path: &std::path::Path) -> usize {
+    std::fs::read_dir(path)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().is_file())
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 fn open_folder(path: &std::path::Path) -> Result<(), String> {
@@ -1665,13 +2055,14 @@ fn open_url(url: &str) -> Result<(), String> {
     }
 }
 
-/// Match the Windows renderer on each platform (DX12 on Windows, Metal on macOS).
+/// Prefer platform-native GPU backends when the user has not set `WGPU_BACKEND`.
 fn configure_render_backend() {
     std::env::set_var("WGPU_VALIDATION", "0");
+    if std::env::var_os("WGPU_BACKEND").is_some() {
+        return;
+    }
     #[cfg(windows)]
     std::env::set_var("WGPU_BACKEND", "dx12");
-    #[cfg(target_os = "macos")]
-    std::env::set_var("WGPU_BACKEND", "metal");
 }
 
 fn app_window_settings(icon: Option<iced::window::Icon>) -> iced::window::Settings {

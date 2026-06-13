@@ -8,5 +8,12 @@ codegen-units = 1
 strip = true
 panic = "abort"
 
+# Shipping profile for macOS when `release` needs dev-like cfg (optional fallback).
+[profile.dist]
+inherits = "dev"
+opt-level = 2
+strip = true
+lto = false
+
 [patch.crates-io]
 winapi = { git = "https://github.com/retep998/winapi-rs", branch = "0.3" }

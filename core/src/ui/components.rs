@@ -500,28 +500,16 @@ pub fn loading_state(message: &str) -> Element<Message> {
     .into()
 }
 
-/// Centered copyright footer for the application window
+/// Centered copyright footer for the application window.
 pub fn copyright_footer(theme: &crate::ui::Theme) -> Element<'static, Message> {
     container(
-        row![
-            button(
-                text("About")
-                    .size(10)
-                    .style(styles::text_color_muted(*theme))
-            )
-            .on_press(Message::ShowAbout)
-            .style(iced::theme::Button::Text)
-            .padding([0, 4]),
-            text("© 2026 Rhythmic Records")
-                .size(10)
-                .style(styles::text_color_muted(*theme))
-                .horizontal_alignment(iced::alignment::Horizontal::Center),
-        ]
-        .align_items(Alignment::Center)
-        .spacing(8),
+        text("© 2026 Rhythmic Records")
+            .size(10)
+            .style(styles::text_color_muted(*theme))
+            .horizontal_alignment(iced::alignment::Horizontal::Center),
     )
     .width(Length::Fill)
-    .padding([4, 0, 2, 0])
+    .padding([2, 0, 4, 0])
     .center_x()
     .into()
 }

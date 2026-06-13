@@ -60,6 +60,7 @@ pub enum Message {
     
     // Settings messages
     OpenLogFolder,
+    OpenReceiveFolder,
     ClearCache,
     RunDiagnostics,
     
@@ -67,6 +68,8 @@ pub enum Message {
     ShowMainView,
     ShowSettings,
     ShowAbout,
+    CloseAbout,
+    OpenCashAppDonation,
 
     // User settings
     BroadcastNameChanged(String),
@@ -87,6 +90,15 @@ pub enum Message {
     ShowWebDrop,
     ShowDjMode,
     ExitDjMode,
+    RefreshWebDropUrl,
+    DjScanDrawers,
+    DjDrawerOpen(String),
+    DjDrawerRenameStart(String),
+    DjDrawerRenameInput(String),
+    DjDrawerRenameSubmit,
+    DjDrawerRenameCancel,
+    DjDrawerMoveUp(String),
+    DjDrawerMoveDown(String),
 
     // System tray / window
     TrayAction(String),
@@ -106,6 +118,11 @@ pub enum Message {
 
     // Discovery visibility (macOS AirDrop-style)
     VisibilityChanged(crate::ui::views::settings_view::AirDropVisibility),
+
+    // Main view layout
+    SetDeviceViewMode(crate::ui::views::device_list_view::DeviceViewMode),
+    ListSortBy(crate::ui::views::device_list_view::ListSortColumn),
+    ToggleDiscoveryFreeze,
     
     // External link messages
     OpenLicenses,

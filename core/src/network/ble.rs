@@ -11,6 +11,18 @@ use std::time::Duration;
 
 /// Apple's BLE manufacturer company identifier.
 const APPLE_COMPANY_ID: u16 = 0x004C;
+/// Exponential moving average weight for fresh RSSI samples (reduces sonar jitter).
+const RSSI_SMOOTH_ALPHA: f32 = 0.38;
+
+fn smooth_rssi(previous: i16, sample: i16) -> i16 {
+    if previous == 0 {
+        return sample;
+    }
+    if sample == 0 {
+        return previous;
+    }
+    (previous as f32 * (1.0 - RSSI_SMOOTH_ALPHA) + sample as f32 * RSSI_SMOOTH_ALPHA).round() as i16
+}
 
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
@@ -32,6 +44,8 @@ pub struct BleDevice {
     /// only emits accessory beacons. Shown when "Show all nearby devices"
     /// is enabled — handy for locating a lost device by signal strength.
     pub accessory_label: Option<&'static str>,
+    /// Mobile phone/tablet hints for anonymous BLE peers.
+    pub mobile_profile: crate::network::discovery::BleMobileProfile,
 }
 
 /// What an Apple Continuity advertisement tells us about a device.
@@ -183,14 +197,24 @@ impl BleManager {
 
                             let local_name = props.local_name.clone().unwrap_or_default();
 
-                            // Keep all Apple devices — phones/tablets/Macs and
-                            // accessories (the UI decides whether accessories
-                            // are shown). Drop non-Apple Bluetooth noise.
+                            let profile = crate::network::discovery::ble_mobile_profile(
+                                &local_name,
+                                &props.manufacturer_data,
+                                &props.service_data,
+                                &props.services,
+                                props.class,
+                                beacon.presence,
+                                beacon.airdrop,
+                                beacon.accessory_only,
+                            );
+
+                            // Keep Apple devices, Android/mobile BLE peers, and named peripherals.
                             let has_signal = beacon.airdrop
                                 || beacon.presence
                                 || beacon.accessory_only
+                                || profile.is_mobile
                                 || !local_name.is_empty();
-                            if !beacon.is_apple || !has_signal {
+                            if (!beacon.is_apple && !profile.is_mobile) || !has_signal {
                                 continue;
                             }
 
@@ -204,6 +228,7 @@ impl BleManager {
                                 apple: beacon.is_apple,
                                 airdrop_active: beacon.airdrop,
                                 accessory_label: beacon.accessory_label,
+                                mobile_profile: profile,
                             };
 
                             // btleplug keeps departed peripherals in its cache
@@ -226,7 +251,8 @@ impl BleManager {
                                             ),
                                         );
                                     }
-                                    let changed = existing.rssi != device.rssi
+                                    let smoothed_rssi = smooth_rssi(existing.rssi, device.rssi);
+                                    let changed = smoothed_rssi != existing.rssi
                                         || existing.manufacturer_data
                                             != device.manufacturer_data
                                         || existing.name != device.name;
@@ -235,7 +261,11 @@ impl BleManager {
                                     } else {
                                         existing.last_seen
                                     };
-                                    *existing = BleDevice { last_seen, ..device };
+                                    *existing = BleDevice {
+                                        last_seen,
+                                        rssi: smoothed_rssi,
+                                        ..device
+                                    };
                                 }
                                 None => {
                                     devices_lock.insert(device_id, device);
