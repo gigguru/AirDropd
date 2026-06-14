@@ -475,7 +475,8 @@ impl<'a> MainView<'a> {
         let logo = container(
             image(assets::toolbar_logo())
                 .height(Length::Fixed(34.0))
-                .width(Length::Fixed(34.0)),
+                .width(Length::Fixed(34.0))
+                .content_fit(iced::ContentFit::Contain),
         )
         .center_y()
         .padding([0, 2]);
@@ -490,8 +491,8 @@ impl<'a> MainView<'a> {
             self.toolbar_nav_link("Receive via QR", Message::ShowWebDrop, theme, None),
             self.toolbar_nav_link("Activity", Message::ShowActivity, theme, None),
             Space::with_width(Length::Fill),
-            Self::toolbar_icon_button(icons::folder(), Message::OpenReceiveFolder),
-            Self::toolbar_icon_button(icons::settings(), Message::ShowSettings),
+            Self::toolbar_icon_button(icons::folder(theme), Message::OpenReceiveFolder),
+            Self::toolbar_icon_button(icons::settings(theme), Message::ShowSettings),
             self.toolbar_nav_link(
                 if self.is_scanning { "Stop" } else { "Refresh" },
                 if self.is_scanning {

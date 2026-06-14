@@ -181,7 +181,7 @@ fn list_header(
 
     let freeze_btn = tooltip(
         button(
-            svg(icons::ice_cube())
+            svg(icons::ice_cube(theme))
                 .width(18)
                 .height(18),
         )
@@ -299,7 +299,7 @@ fn list_row<'a>(
 pub fn freeze_button(discovery_frozen: bool) -> Element<'static, Message> {
     tooltip(
         button(
-            svg(icons::ice_cube())
+            svg(icons::ice_cube(&Theme::Dark))
                 .width(18)
                 .height(18),
         )

@@ -48,7 +48,8 @@ fn about_card(theme: &Theme) -> Element<'static, Message> {
                     container(
                         image(assets::toolbar_logo())
                             .width(Length::Fixed(148.0))
-                            .height(Length::Fixed(148.0)),
+                            .height(Length::Fixed(148.0))
+                            .content_fit(iced::ContentFit::Contain),
                     )
                     .center_x()
                     .width(Length::Fixed(168.0)),

@@ -335,7 +335,8 @@ fn drop_panel<'a>(
         column![
             image(assets::toolbar_logo())
                 .height(Length::Fixed(48.0))
-                .width(Length::Fixed(48.0)),
+                .width(Length::Fixed(48.0))
+                .content_fit(iced::ContentFit::Contain),
             Space::with_height(8),
             text("Connecting…")
                 .size(13)
@@ -347,7 +348,8 @@ fn drop_panel<'a>(
         column![
             image(assets::toolbar_logo())
                 .height(Length::Fixed(56.0))
-                .width(Length::Fixed(56.0)),
+                .width(Length::Fixed(56.0))
+                .content_fit(iced::ContentFit::Contain),
             Space::with_height(8),
             text(title)
                 .size(13)
