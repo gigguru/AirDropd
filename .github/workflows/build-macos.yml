@@ -44,7 +44,7 @@ jobs:
         env:
           MACOS_TARGET: ${{ matrix.macos_target }}
         run: |
-          chmod +x apple/build-macos.sh apple/packaging/make-dmg.sh
+          chmod +x apple/build-macos.sh apple/packaging/make-dmg.sh apple/packaging/generate-icons.sh
           ./apple/build-macos.sh
           ls -la dist/
 
@@ -77,7 +77,7 @@ jobs:
         env:
           MACOS_TARGET: universal
         run: |
-          chmod +x apple/build-macos.sh apple/packaging/make-dmg.sh
+          chmod +x apple/build-macos.sh apple/packaging/make-dmg.sh apple/packaging/generate-icons.sh
           ./apple/build-macos.sh
           ls -la dist/
 

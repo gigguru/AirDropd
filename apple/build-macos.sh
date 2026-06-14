@@ -15,7 +15,6 @@ APP="$ROOT/apple/dist/AirDropd.app"
 MACOS="$APP/Contents/MacOS"
 RES="$APP/Contents/Resources"
 DIST="$ROOT/dist"
-PNG="$ROOT/assets/airdropd-icon.png"
 PACKAGING="$ROOT/apple/packaging"
 
 NATIVE_ARCH="$(uname -m)"
@@ -40,6 +39,9 @@ else
 fi
 
 echo "==> Building AirDropd for macOS ($ARCH_LABEL)..."
+
+chmod +x "$PACKAGING/generate-icons.sh"
+"$PACKAGING/generate-icons.sh"
 
 for target in "${TARGETS[@]}"; do
     if ! rustup target list --installed | grep -qx "$target"; then
@@ -66,24 +68,21 @@ fi
 chmod +x "$MACOS/AirDropd"
 
 cp "$PACKAGING/Info.plist" "$APP/Contents/Info.plist"
+printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-ICONSET="$(mktemp -d)/AppIcon.iconset"
-mkdir -p "$ICONSET"
-sips -z 16 16 "$PNG" --out "$ICONSET/icon_16x16.png" >/dev/null
-sips -z 32 32 "$PNG" --out "$ICONSET/icon_16x16@2x.png" >/dev/null
-sips -z 32 32 "$PNG" --out "$ICONSET/icon_32x32.png" >/dev/null
-sips -z 64 64 "$PNG" --out "$ICONSET/icon_32x32@2x.png" >/dev/null
-sips -z 128 128 "$PNG" --out "$ICONSET/icon_128x128.png" >/dev/null
-sips -z 256 256 "$PNG" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
-sips -z 256 256 "$PNG" --out "$ICONSET/icon_256x256.png" >/dev/null
-sips -z 512 512 "$PNG" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
-sips -z 512 512 "$PNG" --out "$ICONSET/icon_512x512.png" >/dev/null
-sips -z 1024 1024 "$PNG" --out "$ICONSET/icon_512x512@2x.png" >/dev/null
-iconutil -c icns "$ICONSET" -o "$RES/AppIcon.icns"
+# App bundle icon (Finder / Dock) — must match CFBundleIconFile in Info.plist.
+"$PACKAGING/generate-icons.sh" "$RES/AppIcon.icns"
+
+if [[ ! -f "$RES/AppIcon.icns" ]]; then
+    echo "ERROR: AppIcon.icns was not created" >&2
+    exit 1
+fi
+iconutil -c iconset "$RES/AppIcon.icns" -o "$(mktemp -d)/verify.iconset" >/dev/null
+echo "==> Verified AppIcon.icns"
 
 echo "==> Verifying binary..."
 file "$MACOS/AirDropd"
-ls -la "$MACOS/AirDropd"
+ls -la "$MACOS/AirDropd" "$RES/AppIcon.icns"
 
 ZIP="$DIST/AirDropd-macos-${ARCH_LABEL}.zip"
 rm -f "$ZIP"
@@ -93,10 +92,14 @@ echo "Created $ZIP"
 chmod +x "$PACKAGING/make-dmg.sh"
 DMG="$DIST/AirDropd Setup.dmg"
 rm -f "$DMG"
-"$PACKAGING/make-dmg.sh" "$APP" "$DMG" "$PNG"
+"$PACKAGING/make-dmg.sh" "$APP" "$DMG" "$ROOT/assets/airdropd-icon.png"
+
+rm -rf "$DIST/AirDropd.app"
+cp -R "$APP" "$DIST/AirDropd.app"
 
 echo ""
 echo "Done:"
 echo "  $APP"
+echo "  $DIST/AirDropd.app"
 echo "  $ZIP"
 echo "  $DMG"

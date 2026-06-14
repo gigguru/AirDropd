@@ -29,6 +29,21 @@ jobs:
         with:
           workspaces: ". -> target"
 
+      - name: Sync application icons
+        run: |
+          pip install pillow
+          python - <<'PY'
+          import subprocess, sys
+          from pathlib import Path
+          root = Path(".")
+          png = root / "assets" / "airdropd-icon.png"
+          ico = root / "assets" / "airdropd.ico"
+          from PIL import Image
+          img = Image.open(png).convert("RGBA")
+          img.save(ico, format="ICO", sizes=[(s, s) for s in [16, 24, 32, 48, 64, 128, 256]])
+          print(f"Synced {ico}")
+          PY
+
       - name: Build release
         run: cargo build --release --manifest-path windows/Cargo.toml
 
