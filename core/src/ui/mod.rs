@@ -494,6 +494,12 @@ impl Application for AirDropdApp {
             }
 
             Message::ToggleDiscoveryFreeze => {
+                if self.license_gate(
+                    crate::licensing::GatedFeature::DiscoveryFreeze,
+                    "Discovery freeze is available in the registered version.",
+                ) {
+                    return Command::none();
+                }
                 self.discovery_frozen = !self.discovery_frozen;
                 Command::none()
             }
@@ -607,6 +613,10 @@ impl Application for AirDropdApp {
                 self.airdrop_status = crate::protocols::airdrop::AirDropStatus::Idle;
                 match result {
                     Ok(()) => {
+                        if let Ok(mut cfg) = self.services.config.write() {
+                            cfg.license_store().record_demo_send();
+                            let _ = cfg.save();
+                        }
                         self.selected_device = None;
                         self.add_notification(
                             "Transfer complete".to_string(),
@@ -726,6 +736,17 @@ impl Application for AirDropdApp {
             }
             
             Message::VisibilityChanged(visibility) => {
+                if matches!(
+                    visibility,
+                    crate::config::DiscoveryMode::AppleDevices
+                        | crate::config::DiscoveryMode::AndroidDevices
+                        | crate::config::DiscoveryMode::AirTags
+                ) && self.license_gate(
+                    crate::licensing::GatedFeature::AdvancedDiscovery,
+                    "Advanced discovery filters require registration.",
+                ) {
+                    return Command::none();
+                }
                 self.discovery_visibility = visibility;
                 let show_all = self
                     .services
@@ -968,11 +989,27 @@ impl Application for AirDropdApp {
             }
 
             Message::AutoAcceptIncomingChanged(value) => {
+                if value
+                    && self.license_gate(
+                        crate::licensing::GatedFeature::AutoAccept,
+                        "Auto-accept requires registration.",
+                    )
+                {
+                    return Command::none();
+                }
                 self.settings_view.set_auto_accept_incoming(value);
                 Command::none()
             }
 
             Message::ShowAllDevicesChanged(value) => {
+                if value
+                    && self.license_gate(
+                        crate::licensing::GatedFeature::ShowAllDevices,
+                        "Show all nearby devices requires registration.",
+                    )
+                {
+                    return Command::none();
+                }
                 self.settings_view.set_show_all_devices(value);
                 if let Ok(mut cfg) = self.services.config.write() {
                     cfg.show_all_devices = value;
@@ -1221,7 +1258,7 @@ impl Application for AirDropdApp {
 
             Message::OpenCashAppDonation => Command::perform(
                 async {
-                    open_url("https://cash.app/$therealstollie").map_err(|e| e.to_string())
+                    open_url("https://cash.app/$therealstollie/10").map_err(|e| e.to_string())
                 },
                 |res| match res {
                     Ok(()) => Message::Tick,
@@ -1361,6 +1398,61 @@ impl Application for AirDropdApp {
                 },
             ),
 
+            Message::LicenseKeyInputChanged(value) => {
+                self.settings_view.set_license_key_input(value);
+                Command::none()
+            }
+
+            Message::ActivateLicense => {
+                let key = self.settings_view.license_key_input().to_string();
+                let result = {
+                    let mut cfg = match self.services.config.write() {
+                        Ok(c) => c,
+                        Err(_) => return Command::none(),
+                    };
+                    let activate = cfg.license_store().activate(&key);
+                    if activate.is_ok() {
+                        let _ = cfg.save();
+                    }
+                    activate
+                };
+                match result {
+                    Ok(()) => {
+                        self.add_notification(
+                            "Registered".to_string(),
+                            "AirDropd is fully unlocked on this computer.".to_string(),
+                            messages::NotificationType::Success,
+                        );
+                        Command::perform(
+                            Self::fetch_devices(self.services.clone()),
+                            Message::DevicesRefreshed,
+                        )
+                    }
+                    Err(e) => {
+                        self.add_notification(
+                            "Registration failed".to_string(),
+                            e.to_string(),
+                            messages::NotificationType::Error,
+                        );
+                        Command::none()
+                    }
+                }
+            }
+
+            Message::DeactivateLicense => {
+                if let Ok(mut cfg) = self.services.config.write() {
+                    cfg.license_store().deactivate();
+                    let _ = cfg.save();
+                }
+                self.settings_view.set_license_key_input(String::new());
+                self.add_notification(
+                    "License removed".to_string(),
+                    "This computer is back in demo mode.".to_string(),
+                    messages::NotificationType::Info,
+                );
+                Command::none()
+            }
+
             // Handle all other message variants with a wildcard pattern
             _ => Command::none(),
         }
@@ -1468,6 +1560,30 @@ impl Application for AirDropdApp {
 }
 
 impl AirDropdApp {
+    /// Show a registration prompt when a registered-only feature is blocked in demo mode.
+    fn license_gate(&mut self, feature: crate::licensing::GatedFeature, message: &str) -> bool {
+        let needs = self
+            .services
+            .config
+            .read()
+            .map(|c| {
+                let mut fields = c.license.clone();
+                crate::licensing::LicenseStore::new(&mut fields)
+                    .requires_registration_for_feature(feature)
+            })
+            .unwrap_or(false);
+        if needs {
+            self.add_notification(
+                "Registration required".to_string(),
+                message.to_string(),
+                messages::NotificationType::Warning,
+            );
+            true
+        } else {
+            false
+        }
+    }
+
     /// Loading view.
     fn loading_view(&self) -> Element<Message> {
         components::loading_state(&self.status_message)
@@ -1499,7 +1615,13 @@ impl AirDropdApp {
  
     /// Settings view.
     fn settings_view(&self) -> Element<Message> {
-        self.settings_view.view(&self.theme)
+        let cfg = self
+            .services
+            .config
+            .read()
+            .map(|c| c.clone())
+            .unwrap_or_default();
+        self.settings_view.view(&cfg, &self.theme)
     }
 
     /// Recompute the Web Drop URL + QR for the current network address.
@@ -1871,6 +1993,26 @@ impl AirDropdApp {
             return Command::none();
         }
 
+        let (total_bytes, has_folder) = send_paths_stats(&paths);
+        let send_check = {
+            let mut cfg = match self.services.config.write() {
+                Ok(c) => c,
+                Err(_) => return Command::none(),
+            };
+            let item_count = if has_folder { 2 } else { paths.len().max(1) };
+            cfg.license_store()
+                .check_send(total_bytes, item_count)
+                .map_err(|e| e.to_string())
+        };
+        if let Err(e) = send_check {
+            self.add_notification(
+                "Demo limit".to_string(),
+                e,
+                messages::NotificationType::Warning,
+            );
+            return Command::none();
+        }
+
         let count = paths.len();
         let label = if count == 1 {
             paths[0]
@@ -2004,6 +2146,37 @@ impl AirDropdApp {
             .filter_map(|name| map.get(name).cloned())
             .collect();
     }
+}
+
+fn send_paths_stats(paths: &[std::path::PathBuf]) -> (u64, bool) {
+    let mut total = 0u64;
+    let mut has_folder = false;
+    for path in paths {
+        if path.is_dir() {
+            has_folder = true;
+            total = total.saturating_add(dir_size_estimate(path));
+        } else if let Ok(meta) = std::fs::metadata(path) {
+            total = total.saturating_add(meta.len());
+        }
+    }
+    (total, has_folder)
+}
+
+fn dir_size_estimate(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if let Ok(meta) = std::fs::metadata(&p) {
+                    total = total.saturating_add(meta.len());
+                }
+            } else if p.is_dir() {
+                total = total.saturating_add(dir_size_estimate(&p));
+            }
+        }
+    }
+    total
 }
 
 fn count_files_in_dir(path: &std::path::Path) -> usize {

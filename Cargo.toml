@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "apple", "windows"]
+members = ["core", "apple", "windows", "tools/airdropd-keygen"]
 resolver = "2"
 
 [profile.release]

@@ -10,6 +10,7 @@ use iced::{
 
 use crate::ui::{messages::Message, styles, Theme};
 use crate::config::{AppConfig, DiscoveryMode};
+use crate::ui::views::registration_view::RegistrationView;
 use std::path::PathBuf;
 
 /// Discovery visibility options (shared with the main view picker).
@@ -23,6 +24,7 @@ pub struct SettingsView {
     minimize_to_tray: bool,
     auto_accept_incoming: bool,
     show_all_devices: bool,
+    registration: RegistrationView,
 }
 
 impl SettingsView {
@@ -33,6 +35,7 @@ impl SettingsView {
             minimize_to_tray: cfg.minimize_to_tray,
             auto_accept_incoming: cfg.auto_accept_incoming,
             show_all_devices: cfg.show_all_devices,
+            registration: RegistrationView::from_config(cfg),
         }
     }
 
@@ -70,7 +73,15 @@ impl SettingsView {
         self.show_all_devices = value;
     }
 
-    pub fn view(&self, theme: &Theme) -> Element<Message> {
+    pub fn set_license_key_input(&mut self, value: String) {
+        self.registration.set_key_input(value);
+    }
+
+    pub fn license_key_input(&self) -> &str {
+        &self.registration.key_input
+    }
+
+    pub fn view(&self, cfg: &AppConfig, theme: &Theme) -> Element<Message> {
         let header = row![
             button(text("← Back").size(14))
                 .on_press(Message::ShowMainView)
@@ -91,6 +102,8 @@ impl SettingsView {
 
         let content = scrollable(
             column![
+                self.registration.view(cfg, theme),
+                Space::with_height(styles::spacing::LARGE),
                 self.general_settings(theme),
                 Space::with_height(styles::spacing::LARGE),
                 self.airdrop_settings(theme),
@@ -158,14 +171,14 @@ impl SettingsView {
             .on_toggle(Message::AutoAcceptIncomingChanged),
             text(
                 "When enabled, files sent to this PC are saved without asking. \
-                 Great for performances: guests' tracks land straight in your download folder.",
+                 Registered only — great for performances and DJ Mode.",
             )
             .size(12),
             checkbox("Show all nearby devices", self.show_all_devices)
                 .on_toggle(Message::ShowAllDevicesChanged),
             text(
                 "Also shows headphones, trackers, watches, and other nearby beacons on the \
-                 radar — walk around and watch the distance update to locate a lost device.",
+                 radar. Registered only.",
             )
             .size(12),
         ]

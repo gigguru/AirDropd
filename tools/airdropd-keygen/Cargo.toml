@@ -1,0 +1,18 @@
+[package]
+name = "airdropd-keygen"
+version = "0.1.0"
+edition = "2021"
+description = "Generate AirDropd XXXX-XXXX-XXXX product keys"
+authors = ["Rhythmic Records"]
+license = "Proprietary"
+
+[[bin]]
+name = "airdropd-keygen"
+path = "src/main.rs"
+
+[dependencies]
+airdropd-core = { path = "../../core" }
+clap = { version = "4.0", features = ["derive"] }
+rand = "0.8"
+chrono = "0.4"
+anyhow = "1.0"

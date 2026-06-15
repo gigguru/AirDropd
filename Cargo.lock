@@ -146,6 +146,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "airdropd-keygen"
+version = "0.1.0"
+dependencies = [
+ "airdropd-core",
+ "anyhow",
+ "chrono",
+ "clap",
+ "rand 0.8.5",
+]
+
+[[package]]
 name = "airdropd-windows"
 version = "0.1.0"
 dependencies = [

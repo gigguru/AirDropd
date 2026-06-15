@@ -12,3 +12,4 @@ pub mod dj_mode_view;
 pub mod splash_view;
 pub mod device_list_view;
 pub mod device_form;
+pub mod registration_view;

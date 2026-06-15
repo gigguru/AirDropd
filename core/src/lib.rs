@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 
 pub mod activity;
 pub mod config;
+pub mod licensing;
 pub mod network;
 pub mod protocols;
 pub mod ui;

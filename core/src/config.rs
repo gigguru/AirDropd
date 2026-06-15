@@ -127,6 +127,9 @@ pub struct AppConfig {
     /// same subfolder under `WebDrop/`).
     #[serde(default)]
     pub webdrop_devices: HashMap<String, String>,
+    /// Demo usage counters and product-key registration.
+    #[serde(default)]
+    pub license: crate::licensing::LicenseFields,
 }
 
 fn default_discoverable() -> bool {
@@ -150,11 +153,20 @@ impl Default for AppConfig {
             discovery_mode: DiscoveryMode::Everyone,
             show_all_devices: false,
             webdrop_devices: HashMap::new(),
+            license: crate::licensing::LicenseFields::default(),
         }
     }
 }
 
 impl AppConfig {
+    pub fn license_store(&mut self) -> crate::licensing::LicenseStore<'_> {
+        crate::licensing::LicenseStore::new(&mut self.license)
+    }
+
+    pub fn license_status(&self) -> crate::licensing::LicenseStatus {
+        let mut fields = self.license.clone();
+        crate::licensing::LicenseStore::new(&mut fields).status()
+    }
     pub fn generate_device_ph() -> String {
         let seed = hostname::get()
             .map(|h| h.to_string_lossy().to_string())

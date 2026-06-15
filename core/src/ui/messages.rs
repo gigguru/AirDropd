@@ -123,6 +123,11 @@ pub enum Message {
     SetDeviceViewMode(crate::ui::views::device_list_view::DeviceViewMode),
     ListSortBy(crate::ui::views::device_list_view::ListSortColumn),
     ToggleDiscoveryFreeze,
+
+    // Registration / licensing
+    LicenseKeyInputChanged(String),
+    ActivateLicense,
+    DeactivateLicense,
     
     // External link messages
     OpenLicenses,

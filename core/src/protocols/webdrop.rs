@@ -360,6 +360,14 @@ async fn receive_upload<R: AsyncReadExt + Unpin>(
         return Err(anyhow!("upload exceeds size limit"));
     }
 
+    {
+        let mut cfg = config.write().map_err(|_| anyhow!("config lock poisoned"))?;
+        let mut store = cfg.license_store();
+        store
+            .check_qr_upload(content_length)
+            .map_err(|e| anyhow!("{e}"))?;
+    }
+
     let receive_base = {
         let cfg = config.read().map_err(|_| anyhow!("config lock poisoned"))?;
         cfg.ensure_receive_dir()?
@@ -418,6 +426,11 @@ async fn receive_upload<R: AsyncReadExt + Unpin>(
     }
 
     let _ = receive_base;
+    if saved > 0 {
+        let mut cfg = config.write().map_err(|_| anyhow!("config lock poisoned"))?;
+        cfg.license_store().record_demo_qr_upload();
+        let _ = cfg.save();
+    }
     Ok(saved)
 }
 

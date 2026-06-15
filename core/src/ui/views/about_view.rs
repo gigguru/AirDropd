@@ -82,8 +82,8 @@ fn about_card(theme: &Theme) -> Element<'static, Message> {
                                     .style(styles::colors::TEXT_PRIMARY),
                                 Space::with_height(Length::Fixed(4.0)),
                                 text(
-                                    "Your support helps keep AirDropd improving for artists and \
-                                     creators everywhere.",
+                                    "One-time $10+ donation unlocks the full app with a product key \
+                                     (Windows and macOS, up to 2 devices).",
                                 )
                                 .size(12)
                                 .style(styles::colors::TEXT_MUTED),
@@ -169,11 +169,11 @@ fn cashapp_tile(tile_bg: iced::Color) -> Element<'static, Message> {
                 icon,
                 Space::with_width(Length::Fixed(14.0)),
                 column![
-                    text("Donate via CashApp")
+                    text("Donate $10+ via CashApp")
                         .size(13)
                         .style(styles::colors::TEXT_PRIMARY),
                     Space::with_height(Length::Fixed(2.0)),
-                    text("$therealstollie")
+                    text("$therealstollie · minimum $10")
                         .size(16)
                         .style(CASHAPP_GREEN),
                 ]
